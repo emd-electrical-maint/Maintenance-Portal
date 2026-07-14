@@ -1502,7 +1502,10 @@ function renderEarthPitYearList(stationId){
       + '<h3>'+escapeHtml(y.label)+'</h3>'
       + '<div class="station-meta"><span>'+count+' earth pit record'+(count===1?'':'s')+'</span></div>'
       + '<div class="station-card-footer">'
-      + (y.id ? '<button class="btn btn-station-open btn-sm" data-year-open="'+y.id+'">Open register &rarr;</button>' : '<span class="helper-text">Opens once an admin visits this station</span>')
+      + (y.id
+          ? '<button class="btn btn-station-open btn-sm" data-year-open="'+y.id+'">Open register &rarr;</button>'
+            + (admin ? '<button class="btn btn-danger btn-sm" data-year-delete="'+y.id+'">Delete register</button>' : '')
+          : '<span class="helper-text">Opens once an admin visits this station</span>')
       + '</div></div>';
   }).join('');
 
@@ -1524,8 +1527,24 @@ function renderEarthPitYearList(stationId){
   panel.querySelectorAll('[data-year-open]').forEach(btn=>{
     btn.addEventListener('click', ()=>{ earthPitSelectedYearId = btn.dataset.yearOpen; renderEarthPitsTab(stationId); });
   });
+  panel.querySelectorAll('[data-year-delete]').forEach(btn=>{
+    btn.addEventListener('click', ()=>deleteEarthPitYear(stationId, btn.dataset.yearDelete));
+  });
   const addYearBtn = document.getElementById('add-year-btn');
   if(addYearBtn) addYearBtn.addEventListener('click', ()=>openAddYearModal(stationId));
+}
+
+async function deleteEarthPitYear(stationId, yearId){
+  const year = DB.earthPitYears.find(y=>y.id===yearId);
+  const count = DB.earthPitRecords.filter(r=>r.yearId===yearId).length;
+  if(!confirm('Delete the "'+(year?year.label:'')+'" register'+(count?' and all '+count+' of its earth pit record(s)':'')+'? This cannot be undone.')) return;
+  try {
+    DB.earthPitYears = DB.earthPitYears.filter(y=>y.id!==yearId);
+    DB.earthPitRecords = DB.earthPitRecords.filter(r=>r.yearId!==yearId);
+    await saveDb();
+    toast('Register deleted.', 'success');
+    renderEarthPitYearList(stationId);
+  } catch(e){ toast(e.message, 'error'); }
 }
 
 function openAddYearModal(stationId){
@@ -1552,6 +1571,8 @@ function openAddYearModal(stationId){
     const label = document.getElementById('new-year-label').value.trim();
     const errBox = document.getElementById('modal-form-error');
     if(!label){ errBox.innerHTML = '<div class="form-error">Please enter a year label.</div>'; return; }
+    const isDuplicateYear = years.some(y => y.label.trim().toLowerCase() === label.toLowerCase());
+    if(isDuplicateYear){ errBox.innerHTML = '<div class="form-error">A register for "'+escapeHtml(label)+'" already exists for this station.</div>'; return; }
     const copyCheckbox = document.getElementById('copy-pits-checkbox');
     const shouldCopy = copyCheckbox && copyCheckbox.checked;
     try {
