@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Electrical Maintenance Portal — EMD, Bhilai Steel Plant</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='11' fill='%23d98e2b'/%3E%3Ctext x='32' y='41' font-family='Consolas,Menlo,monospace' font-size='21' font-weight='700' letter-spacing='-1' fill='%230d2033' text-anchor='middle'%3EEMD%3C/text%3E%3C/svg%3E">
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
 /* ============================================================
@@ -78,6 +79,11 @@ button { font-family:inherit; cursor:pointer; }
 .page-header h1 { font-family:var(--font-display); font-size:26px; margin:0 0 4px; letter-spacing:-.01em; }
 .page-eyebrow { font-size:11.5px; text-transform:uppercase; letter-spacing:.08em; color:var(--color-text-muted); font-weight:700; margin-bottom:6px; }
 .page-subtitle { color:var(--color-text-muted); font-size:14px; }
+.homepage-banner { position:relative; margin-bottom:28px; border-radius:var(--radius-card); overflow:hidden; box-shadow:var(--shadow-card); }
+.homepage-banner img { display:block; width:100%; max-height:260px; object-fit:cover; }
+.homepage-banner-actions { position:absolute; top:10px; right:10px; display:flex; gap:6px; }
+.homepage-banner-placeholder { margin-bottom:28px; min-height:140px; }
+
 .safety-banner { display:flex; align-items:center; justify-content:center; text-align:center; gap:14px; background:#fdf6ea; border:1px solid var(--color-border); border-left:5px solid var(--color-accent); border-radius:var(--radius-card); padding:20px 28px; margin-bottom:32px; color:var(--color-text-muted); font-size:14.5px; box-shadow:var(--shadow-card); }
 .safety-banner svg { flex-shrink:0; color:var(--color-accent-dark); }
 .safety-banner strong { color:var(--color-text); font-weight:700; }
@@ -280,7 +286,8 @@ function emptyDb() {
   return {
     stations: [], equipment: [], nameplates: {}, vibrationRecords: [], drawings: [], breakdownHistory: [],
     stationDrawings: [], earthPitYears: [], earthPitRecords: [],
-    safetyDocuments: [], handGloves: [], handGloveTests: [], stationSLD: [], dismissedAlerts: []
+    safetyDocuments: [], handGloves: [], handGloveTests: [], stationSLD: [], dismissedAlerts: [],
+    homepageBanner: null
   };
 }
 
@@ -318,6 +325,7 @@ const EARTHPIT_STATUS_OPTIONS = ['OK','Not OK'];
 const SAFETY_DOC_CATEGORIES = ['Safety Manual','Work Instruction','SOP','SMP','Other'];
 const SAFETY_DOC_EXTENSIONS = ['pdf','jpg','jpeg','png'];
 const SLD_EXTENSIONS = ['jpg','jpeg','png'];
+const BANNER_EXTENSIONS = ['jpg','jpeg','png'];
 const HAND_GLOVE_ALERT_DAYS = 30;
 const EARTH_PIT_ALERT_DAYS = 15;
 
@@ -472,6 +480,7 @@ async function loadDb(){
   DB.handGloveTests = DB.handGloveTests || [];
   DB.stationSLD = DB.stationSLD || [];
   DB.dismissedAlerts = DB.dismissedAlerts || [];
+  DB.homepageBanner = DB.homepageBanner || null;
 }
 
 async function saveDb(){
@@ -716,9 +725,17 @@ function renderHomePage(){
 
   const safetyDocCount = DB.safetyDocuments.length;
   const gloveCount = DB.handGloves.length;
+  const banner = DB.homepageBanner;
+  const bannerHtml = banner
+    ? '<div class="homepage-banner">'
+      + '<img src="'+driveViewUrl(banner.fileId)+'" alt="">'
+      + (admin ? '<div class="homepage-banner-actions"><button class="btn btn-outline btn-sm" id="replace-banner-btn">Replace</button><button class="btn btn-danger btn-sm" id="remove-banner-btn">Remove</button></div>' : '')
+      + '</div>'
+    : (admin ? '<div class="add-inline-card homepage-banner-placeholder" id="add-banner-btn">+ Add homepage banner image</div>' : '');
 
   app.innerHTML =
-    '<div class="safety-banner"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 2L2 7v6c0 5 4.2 8.7 10 9 5.8-.3 10-4 10-9V7l-10-5z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M12 8v5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="12" cy="16" r="1" fill="currentColor"/></svg>'
+    bannerHtml
+    + '<div class="safety-banner"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 2L2 7v6c0 5 4.2 8.7 10 9 5.8-.3 10-4 10-9V7l-10-5z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M12 8v5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="12" cy="16" r="1" fill="currentColor"/></svg>'
     + '<span><strong>Safety first:</strong> PPE is your last line of defense&mdash;never skip it.</span></div>'
     + renderAlertsHtml()
     + '<div class="page-eyebrow">Energy Management Department</div>'
@@ -754,6 +771,58 @@ function renderHomePage(){
   document.querySelectorAll('[data-edit-station]').forEach(btn=>btn.addEventListener('click',()=>openStationModal(btn.dataset.editStation)));
   document.querySelectorAll('[data-delete-station]').forEach(btn=>btn.addEventListener('click',()=>deleteStation(btn.dataset.deleteStation)));
   wireAlertDismissButtons();
+
+  const addBannerBtn = document.getElementById('add-banner-btn');
+  if(addBannerBtn) addBannerBtn.addEventListener('click', ()=>openBannerUploadModal());
+  const replaceBannerBtn = document.getElementById('replace-banner-btn');
+  if(replaceBannerBtn) replaceBannerBtn.addEventListener('click', ()=>openBannerUploadModal());
+  const removeBannerBtn = document.getElementById('remove-banner-btn');
+  if(removeBannerBtn) removeBannerBtn.addEventListener('click', deleteBanner);
+}
+
+function openBannerUploadModal(){
+  const existing = DB.homepageBanner;
+  openModal(
+    existing ? 'Replace Homepage Banner' : 'Add Homepage Banner',
+    '<div id="modal-form-error"></div>'
+    + '<div class="field"><label>Image (JPG, JPEG, PNG)</label><input type="file" id="banner-file-input" accept=".jpg,.jpeg,.png"></div>'
+    + '<div class="helper-text">Shown at the very top of the homepage, above the safety banner. If no image is set, this space stays hidden entirely.</div>',
+    '<button class="btn btn-outline" id="modal-cancel-btn">Cancel</button><button class="btn btn-primary" id="modal-save-btn">'+(existing?'Replace':'Upload')+'</button>'
+  );
+  document.getElementById('modal-cancel-btn').addEventListener('click', closeModal);
+  document.getElementById('modal-save-btn').addEventListener('click', async ()=>{
+    const fileInput = document.getElementById('banner-file-input');
+    const errBox = document.getElementById('modal-form-error');
+    if(!fileInput.files.length){ errBox.innerHTML = '<div class="form-error">Please choose an image.</div>'; return; }
+    const file = fileInput.files[0];
+    const ext = getExtension(file.name);
+    if(!BANNER_EXTENSIONS.includes(ext)){ errBox.innerHTML = '<div class="form-error">File must be JPG, JPEG, or PNG.</div>'; return; }
+    const saveBtn = document.getElementById('modal-save-btn');
+    saveBtn.disabled = true; saveBtn.textContent = 'Uploading\u2026';
+    try {
+      const fileId = await driveUploadBinary(file, CONFIG.UPLOADS_FOLDER_ID);
+      await driveSetPublicReadable(fileId);
+      const oldFileId = existing ? existing.fileId : null;
+      DB.homepageBanner = { id: nextId('banner'), fileId, originalName: file.name, sizeBytes: file.size, uploadedAt: new Date().toISOString(), uploadedBy: currentUserEmail||'admin' };
+      await saveDb();
+      if(oldFileId) driveDeleteFile(oldFileId);
+      closeModal();
+      toast(existing ? 'Banner replaced.' : 'Banner added.', 'success');
+      renderHomePage();
+    } catch(e){ errBox.innerHTML = '<div class="form-error">'+escapeHtml(e.message)+'</div>'; saveBtn.disabled=false; saveBtn.textContent=existing?'Replace':'Upload'; }
+  });
+}
+
+async function deleteBanner(){
+  if(!confirm('Remove the homepage banner image?')) return;
+  const existing = DB.homepageBanner;
+  try {
+    DB.homepageBanner = null;
+    await saveDb();
+    if(existing && existing.fileId) driveDeleteFile(existing.fileId);
+    toast('Banner removed.', 'success');
+    renderHomePage();
+  } catch(e){ toast(e.message, 'error'); }
 }
 
 function openStationModal(id){
@@ -1461,13 +1530,21 @@ function renderEarthPitYearList(stationId){
 
 function openAddYearModal(stationId){
   const years = DB.earthPitYears.filter(y=>y.stationId===stationId).sort((a,b)=>a.sortOrder-b.sortOrder);
-  const lastLabel = years.length ? years[years.length-1].label : SEED_EARTH_PIT_YEAR;
-  const suggested = suggestNextYearLabel(lastLabel);
+  const lastYear = years.length ? years[years.length-1] : null;
+  const suggested = suggestNextYearLabel(lastYear ? lastYear.label : SEED_EARTH_PIT_YEAR);
+  const priorPitCount = lastYear ? DB.earthPitRecords.filter(r=>r.yearId===lastYear.id).length : 0;
+
   openModal(
     'Add Financial Year',
     '<div id="modal-form-error"></div>'
     + '<div class="field"><label>Financial year label</label><input type="text" id="new-year-label" value="'+escapeHtml(suggested)+'" placeholder="e.g. 2027\u201328"></div>'
-    + '<div class="helper-text">Each financial year keeps its own, completely independent set of earth pit records.</div>',
+    + '<div class="helper-text">Each financial year keeps its own, completely independent set of earth pit records.</div>'
+    + (priorPitCount > 0
+        ? '<div class="field" style="margin-top:6px;"><label style="font-weight:400; display:flex; align-items:flex-start; gap:8px;">'
+          + '<input type="checkbox" id="copy-pits-checkbox" checked style="margin-top:3px;">'
+          + '<span>Copy the '+priorPitCount+' earth pit number'+(priorPitCount===1?'':'s')+' from <strong>'+escapeHtml(lastYear.label)+'</strong> into this new year (S. No. and Earth Pit No. only &mdash; resistance value, dates, and status fields all start blank/default so you just fill in fresh readings).</span>'
+          + '</label></div>'
+        : ''),
     '<button class="btn btn-outline" id="modal-cancel-btn">Cancel</button><button class="btn btn-primary" id="modal-save-btn">Add Year</button>'
   );
   document.getElementById('modal-cancel-btn').addEventListener('click', closeModal);
@@ -1475,12 +1552,28 @@ function openAddYearModal(stationId){
     const label = document.getElementById('new-year-label').value.trim();
     const errBox = document.getElementById('modal-form-error');
     if(!label){ errBox.innerHTML = '<div class="form-error">Please enter a year label.</div>'; return; }
+    const copyCheckbox = document.getElementById('copy-pits-checkbox');
+    const shouldCopy = copyCheckbox && copyCheckbox.checked;
     try {
       const maxOrder = years.reduce((m,y)=>Math.max(m,y.sortOrder),-1);
-      DB.earthPitYears.push({ id: nextId('epy'), stationId, label, sortOrder: maxOrder+1, createdAt: new Date().toISOString() });
+      const newYear = { id: nextId('epy'), stationId, label, sortOrder: maxOrder+1, createdAt: new Date().toISOString() };
+      DB.earthPitYears.push(newYear);
+      if(shouldCopy && lastYear){
+        const priorRecords = DB.earthPitRecords.filter(r=>r.yearId===lastYear.id);
+        priorRecords.forEach(r=>{
+          DB.earthPitRecords.push({
+            id: nextId('epr'), stationId, yearId: newYear.id,
+            sNo: r.sNo || '', pitNo: r.pitNo || '',
+            resistanceValue: '', testingDate: '', dueDate: '',
+            condition: 'OK', coveringPlates: 'OK', displayBoard: 'OK', continuity: 'OK',
+            createdAt: new Date().toISOString()
+          });
+        });
+      }
       await saveDb();
       closeModal();
-      toast('Financial year added.', 'success');
+      toast(shouldCopy && lastYear ? 'Financial year added with earth pit numbers copied.' : 'Financial year added.', 'success');
+      earthPitSelectedYearId = newYear.id;
       renderEarthPitsTab(stationId);
     } catch(e){ errBox.innerHTML = '<div class="form-error">'+escapeHtml(e.message)+'</div>'; }
   });
@@ -1497,20 +1590,6 @@ function renderEarthPitRegister(stationId, yearId){
   const statusHeaderCells = EARTHPIT_STATUS_FIELDS.map(f=>'<th>'+f.label+'</th>').join('');
 
   const rows = records.map(r=>{
-    if(admin){
-      const statusCells = EARTHPIT_STATUS_FIELDS.map(f=>
-        '<td><select data-ep-field="'+f.key+'">'+EARTHPIT_STATUS_OPTIONS.map(o=>'<option value="'+o+'" '+((r[f.key]||'OK')===o?'selected':'')+'>'+o+'</option>').join('')+'</select></td>'
-      ).join('');
-      return '<tr data-earthpit-row="'+r.id+'">'
-        + '<td><input type="text" data-ep-field="sNo" value="'+escapeHtml(r.sNo||'')+'" style="width:56px;"></td>'
-        + '<td><input type="text" data-ep-field="pitNo" value="'+escapeHtml(r.pitNo||'')+'" style="width:110px;"></td>'
-        + '<td><input type="text" data-ep-field="resistanceValue" value="'+escapeHtml(r.resistanceValue||'')+'" style="width:100px;"></td>'
-        + '<td><input type="date" data-ep-field="testingDate" value="'+(r.testingDate||'')+'"></td>'
-        + '<td><input type="date" data-ep-field="dueDate" value="'+(r.dueDate||'')+'"></td>'
-        + statusCells
-        + '<td><button class="btn btn-danger btn-sm" data-ep-delete="'+r.id+'">Delete</button></td>'
-        + '</tr>';
-    }
     const statusReadCells = EARTHPIT_STATUS_FIELDS.map(f=>'<td>'+escapeHtml(r[f.key]||'OK')+'</td>').join('');
     return '<tr>'
       + '<td class="mono">'+escapeHtml(r.sNo||'\u2014')+'</td>'
@@ -1519,6 +1598,7 @@ function renderEarthPitRegister(stationId, yearId){
       + '<td class="mono">'+formatDate(r.testingDate)+'</td>'
       + '<td class="mono">'+formatDate(r.dueDate)+'</td>'
       + statusReadCells
+      + (admin ? '<td class="row-actions"><button class="btn btn-outline btn-sm" data-ep-edit="'+r.id+'">Edit</button><button class="btn btn-danger btn-sm" data-ep-delete="'+r.id+'">Delete</button></td>' : '')
       + '</tr>';
   }).join('');
 
@@ -1529,7 +1609,7 @@ function renderEarthPitRegister(stationId, yearId){
     + (admin ? '<button class="btn btn-primary btn-sm" id="add-earthpit-btn">+ Add Earth Pit</button>' : '')
     + '</div>'
     + (records.length===0
-      ? '<div class="empty-state"><h3>No earth pit records yet</h3><p>'+(admin?'Add the first row above.':'No records have been added for this year yet.')+'</p></div>'
+      ? '<div class="empty-state"><h3>No earth pit records yet</h3><p>'+(admin?'Add the first record above.':'No records have been added for this year yet.')+'</p></div>'
       : '<div style="overflow-x:auto;"><table class="data-table"><thead><tr>'
         + '<th>S. No.</th><th>Earth Pit No.</th><th>Earth Resistance Value (&Omega;)</th><th>Testing Date</th><th>Due Date</th>'+statusHeaderCells
         + (admin?'<th></th>':'')
@@ -1543,30 +1623,13 @@ function renderEarthPitRegister(stationId, yearId){
 
   if(!admin) return;
 
-  document.getElementById('add-earthpit-btn').addEventListener('click', async ()=>{
-    try {
-      DB.earthPitRecords.push({
-        id: nextId('epr'), stationId, yearId, sNo:'', pitNo:'', resistanceValue:'',
-        testingDate:'', dueDate:'', condition:'OK', coveringPlates:'OK', displayBoard:'OK', continuity:'OK',
-        createdAt: new Date().toISOString()
-      });
-      await saveDb();
-      renderEarthPitRegister(stationId, yearId);
-    } catch(e){ toast(e.message, 'error'); }
-  });
-
-  panel.querySelectorAll('[data-earthpit-row]').forEach(rowEl=>{
-    const recId = rowEl.dataset.earthpitRow;
-    rowEl.querySelectorAll('[data-ep-field]').forEach(input=>{
-      input.addEventListener('change', async ()=>{
-        const rec = DB.earthPitRecords.find(r=>r.id===recId);
-        if(!rec) return;
-        rec[input.dataset.epField] = input.value;
-        try { await saveDb(); } catch(e){ toast('Could not save: '+e.message, 'error'); }
-      });
+  document.getElementById('add-earthpit-btn').addEventListener('click', ()=>openEarthPitModal(stationId, yearId));
+  panel.querySelectorAll('[data-ep-edit]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const rec = records.find(r=>r.id===btn.dataset.epEdit);
+      openEarthPitModal(stationId, yearId, rec);
     });
   });
-
   panel.querySelectorAll('[data-ep-delete]').forEach(btn=>{
     btn.addEventListener('click', async ()=>{
       if(!confirm('Delete this earth pit record?')) return;
@@ -1577,6 +1640,56 @@ function renderEarthPitRegister(stationId, yearId){
         renderEarthPitRegister(stationId, yearId);
       } catch(e){ toast(e.message, 'error'); }
     });
+  });
+}
+
+function openEarthPitModal(stationId, yearId, record){
+  const statusFieldsHtml = EARTHPIT_STATUS_FIELDS.map(f=>
+    '<div class="field"><label>'+f.label+'</label><select id="ep-'+f.key+'-input">'
+    + EARTHPIT_STATUS_OPTIONS.map(o=>'<option value="'+o+'" '+((record&&record[f.key]||'OK')===o?'selected':'')+'>'+o+'</option>').join('')
+    + '</select></div>'
+  ).join('');
+
+  openModal(
+    record ? 'Edit Earth Pit Record' : 'Add Earth Pit',
+    '<div id="modal-form-error"></div>'
+    + '<div class="field-row">'
+    + '<div class="field"><label>S. No.</label><input type="text" id="ep-sno-input" value="'+escapeHtml(record?record.sNo:'')+'"></div>'
+    + '<div class="field"><label>Earth Pit No.</label><input type="text" id="ep-pitno-input" value="'+escapeHtml(record?record.pitNo:'')+'"></div>'
+    + '</div>'
+    + '<div class="field"><label>Earth Resistance Value (&Omega;)</label><input type="text" id="ep-resistance-input" value="'+escapeHtml(record?record.resistanceValue:'')+'"></div>'
+    + '<div class="field-row">'
+    + '<div class="field"><label>Testing Date</label><input type="date" id="ep-testingdate-input" value="'+(record?record.testingDate||'':'')+'"></div>'
+    + '<div class="field"><label>Due Date</label><input type="date" id="ep-duedate-input" value="'+(record?record.dueDate||'':'')+'"></div>'
+    + '</div>'
+    + statusFieldsHtml,
+    '<button class="btn btn-outline" id="modal-cancel-btn">Cancel</button><button class="btn btn-primary" id="modal-save-btn">Save</button>'
+  );
+  document.querySelector('#modal-overlay .modal').style.maxWidth = '540px';
+  document.getElementById('modal-cancel-btn').addEventListener('click', closeModal);
+  document.getElementById('modal-save-btn').addEventListener('click', async ()=>{
+    const testingDate = document.getElementById('ep-testingdate-input').value;
+    const dueDate = document.getElementById('ep-duedate-input').value;
+    const errBox = document.getElementById('modal-form-error');
+    if(testingDate && dueDate && dueDate < testingDate){
+      errBox.innerHTML = '<div class="form-error">Due Date cannot be earlier than Testing Date.</div>';
+      return;
+    }
+    const fields = {
+      sNo: document.getElementById('ep-sno-input').value.trim(),
+      pitNo: document.getElementById('ep-pitno-input').value.trim(),
+      resistanceValue: document.getElementById('ep-resistance-input').value.trim(),
+      testingDate, dueDate
+    };
+    EARTHPIT_STATUS_FIELDS.forEach(f=>{ fields[f.key] = document.getElementById('ep-'+f.key+'-input').value; });
+    try {
+      if(record){ Object.assign(record, fields); }
+      else { DB.earthPitRecords.push(Object.assign({ id: nextId('epr'), stationId, yearId, createdAt: new Date().toISOString() }, fields)); }
+      await saveDb();
+      closeModal();
+      toast('Earth pit reading saved.', 'success');
+      renderEarthPitRegister(stationId, yearId);
+    } catch(e){ errBox.innerHTML = '<div class="form-error">'+escapeHtml(e.message)+'</div>'; }
   });
 }
 
@@ -1838,6 +1951,8 @@ function openGloveModal(gloveId){
     const errBox = document.getElementById('modal-form-error');
     if(!gloveNumber){ errBox.innerHTML = '<div class="form-error">Hand Glove Number is required.</div>'; return; }
     if(!stationId){ errBox.innerHTML = '<div class="form-error">Please select a station.</div>'; return; }
+    const isDuplicate = DB.handGloves.some(g => g.id !== (glove?glove.id:null) && g.gloveNumber.trim().toLowerCase() === gloveNumber.toLowerCase());
+    if(isDuplicate){ errBox.innerHTML = '<div class="form-error">A hand glove with this number already exists.</div>'; return; }
     try {
       if(glove){ glove.sNo=sNo; glove.gloveNumber=gloveNumber; glove.stationId=stationId; glove.make=make; }
       else { DB.handGloves.push({ id: nextId('glv'), sNo, gloveNumber, stationId, make, createdAt: new Date().toISOString() }); }
@@ -1868,17 +1983,11 @@ function renderGloveDetailPage(gloveId){
   const station = DB.stations.find(s=>s.id===glove.stationId);
   const tests = DB.handGloveTests.filter(t=>t.gloveId===gloveId).sort((a,b)=>(a.testingDate||'').localeCompare(b.testingDate||''));
 
-  const rows = tests.map(t=>{
-    if(admin){
-      return '<tr data-test-row="'+t.id+'">'
-        + '<td><input type="date" data-test-field="testingDate" value="'+(t.testingDate||'')+'"></td>'
-        + '<td><input type="date" data-test-field="dueDate" value="'+(t.dueDate||'')+'"></td>'
-        + '<td><input type="text" data-test-field="remarks" value="'+escapeHtml(t.remarks||'')+'" style="width:100%;"></td>'
-        + '<td><button class="btn btn-danger btn-sm" data-test-delete="'+t.id+'">Delete</button></td>'
-        + '</tr>';
-    }
-    return '<tr><td class="mono">'+formatDate(t.testingDate)+'</td><td class="mono">'+formatDate(t.dueDate)+'</td><td>'+escapeHtml(t.remarks||'\u2014')+'</td></tr>';
-  }).join('');
+  const rows = tests.map(t=>
+    '<tr><td class="mono">'+formatDate(t.testingDate)+'</td><td class="mono">'+formatDate(t.dueDate)+'</td><td>'+escapeHtml(t.remarks||'\u2014')+'</td>'
+    + (admin ? '<td class="row-actions"><button class="btn btn-outline btn-sm" data-test-edit="'+t.id+'">Edit</button><button class="btn btn-danger btn-sm" data-test-delete="'+t.id+'">Delete</button></td>' : '')
+    + '</tr>'
+  ).join('');
 
   app.innerHTML =
     '<div class="breadcrumb"><a href="#/">Home</a><span class="sep">/</span><a href="#/ppe">PPEs</a><span class="sep">/</span><a href="#/ppe/gloves">Rubber Hand Gloves</a><span class="sep">/</span><span class="current">'+escapeHtml(glove.gloveNumber)+'</span></div>'
@@ -1894,26 +2003,13 @@ function renderGloveDetailPage(gloveId){
 
   if(!admin) return;
 
-  document.getElementById('add-test-btn').addEventListener('click', async ()=>{
-    try {
-      DB.handGloveTests.push({ id: nextId('glvtest'), gloveId, testingDate:'', dueDate:'', remarks:'', createdAt: new Date().toISOString() });
-      await saveDb();
-      renderGloveDetailPage(gloveId);
-    } catch(e){ toast(e.message, 'error'); }
-  });
-
-  document.querySelectorAll('[data-test-row]').forEach(rowEl=>{
-    const testId = rowEl.dataset.testRow;
-    rowEl.querySelectorAll('[data-test-field]').forEach(input=>{
-      input.addEventListener('change', async ()=>{
-        const rec = DB.handGloveTests.find(t=>t.id===testId);
-        if(!rec) return;
-        rec[input.dataset.testField] = input.value;
-        try { await saveDb(); } catch(e){ toast('Could not save: '+e.message, 'error'); }
-      });
+  document.getElementById('add-test-btn').addEventListener('click', ()=>openGloveTestModal(gloveId));
+  document.querySelectorAll('[data-test-edit]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const rec = tests.find(t=>t.id===btn.dataset.testEdit);
+      openGloveTestModal(gloveId, rec);
     });
   });
-
   document.querySelectorAll('[data-test-delete]').forEach(btn=>{
     btn.addEventListener('click', async ()=>{
       if(!confirm('Delete this testing record?')) return;
@@ -1924,6 +2020,38 @@ function renderGloveDetailPage(gloveId){
         renderGloveDetailPage(gloveId);
       } catch(e){ toast(e.message, 'error'); }
     });
+  });
+}
+
+function openGloveTestModal(gloveId, record){
+  openModal(
+    record ? 'Edit Testing Record' : 'Add Next Testing Record',
+    '<div id="modal-form-error"></div>'
+    + '<div class="field-row">'
+    + '<div class="field"><label>Testing Date</label><input type="date" id="test-testingdate-input" value="'+(record?record.testingDate||'':'')+'"></div>'
+    + '<div class="field"><label>Due Date</label><input type="date" id="test-duedate-input" value="'+(record?record.dueDate||'':'')+'"></div>'
+    + '</div>'
+    + '<div class="field"><label>Remarks</label><textarea id="test-remarks-input">'+escapeHtml(record?record.remarks:'')+'</textarea></div>',
+    '<button class="btn btn-outline" id="modal-cancel-btn">Cancel</button><button class="btn btn-primary" id="modal-save-btn">Save</button>'
+  );
+  document.getElementById('modal-cancel-btn').addEventListener('click', closeModal);
+  document.getElementById('modal-save-btn').addEventListener('click', async ()=>{
+    const testingDate = document.getElementById('test-testingdate-input').value;
+    const dueDate = document.getElementById('test-duedate-input').value;
+    const remarks = document.getElementById('test-remarks-input').value.trim();
+    const errBox = document.getElementById('modal-form-error');
+    if(testingDate && dueDate && dueDate < testingDate){
+      errBox.innerHTML = '<div class="form-error">Due Date cannot be earlier than Testing Date.</div>';
+      return;
+    }
+    try {
+      if(record){ record.testingDate=testingDate; record.dueDate=dueDate; record.remarks=remarks; }
+      else { DB.handGloveTests.push({ id: nextId('glvtest'), gloveId, testingDate, dueDate, remarks, createdAt: new Date().toISOString() }); }
+      await saveDb();
+      closeModal();
+      toast('Hand glove testing entry saved.', 'success');
+      renderGloveDetailPage(gloveId);
+    } catch(e){ errBox.innerHTML = '<div class="form-error">'+escapeHtml(e.message)+'</div>'; }
   });
 }
 
