@@ -511,6 +511,8 @@ async function loadDb(){
   DB.nonExecutives = DB.nonExecutives || [];
   DB.contracts = DB.contracts || [];
   DB.contractDocuments = DB.contractDocuments || [];
+  DB.stationUPS = DB.stationUPS || [];
+  DB.upsTestReports = DB.upsTestReports || [];
   DB.vibrationRecords.forEach(r=>{ if(r.remarks===undefined || r.remarks===null) r.remarks = ''; });
 }
 
@@ -919,14 +921,18 @@ async function deleteStation(id){
     const stationDrawingsToRemove = DB.stationDrawings.filter(d=>d.stationId===id);
     const yearIdsToRemove = DB.earthPitYears.filter(y=>y.stationId===id).map(y=>y.id);
     const sldsToRemove = DB.stationSLD.filter(s=>s.stationId===id);
+    const upsReportsToRemove = DB.upsTestReports.filter(r=>r.stationId===id);
     DB.stations = DB.stations.filter(s=>s.id!==id);
     DB.stationDrawings = DB.stationDrawings.filter(d=>d.stationId!==id);
     DB.earthPitYears = DB.earthPitYears.filter(y=>y.stationId!==id);
     DB.earthPitRecords = DB.earthPitRecords.filter(r=>!yearIdsToRemove.includes(r.yearId));
     DB.stationSLD = DB.stationSLD.filter(s=>s.stationId!==id);
+    DB.stationUPS = DB.stationUPS.filter(u=>u.stationId!==id);
+    DB.upsTestReports = DB.upsTestReports.filter(r=>r.stationId!==id);
     await saveDb();
     stationDrawingsToRemove.forEach(d=>{ if(d.fileId) driveDeleteFile(d.fileId); });
     sldsToRemove.forEach(s=>{ if(s.fileId) driveDeleteFile(s.fileId); });
+    upsReportsToRemove.forEach(r=>{ if(r.fileId) driveDeleteFile(r.fileId); });
     toast('Station deleted.', 'success');
     renderHomePage();
   } catch(e){ toast(e.message, 'error'); }
@@ -935,31 +941,40 @@ async function deleteStation(id){
 /* ============================================================
    STATION PAGE — equipment list
    ============================================================ */
-function renderStationPage(stationId){
+function renderStationPage(stationId, activeTab){
   const app = document.getElementById('app');
   const station = DB.stations.find(s=>s.id===stationId);
   if(!station){ app.innerHTML = '<div class="empty-state"><h3>Station not found</h3></div>'; return; }
   earthPitSelectedYearId = null; // reset drill-down state whenever a station page is (re)loaded
+  const admin = isAdmin();
+  const ups = DB.stationUPS.find(u=>u.stationId===stationId);
+  const hasUPS = Boolean(ups);
+  activeTab = activeTab || 'equipment';
+
+  const tabActive = (name)=> activeTab===name ? ' active' : '';
 
   app.innerHTML =
     '<div class="breadcrumb"><a href="#/">All Stations</a><span class="sep">/</span><span class="current">'+escapeHtml(station.name)+'</span></div>'
     + '<div class="page-header"><div><div class="page-eyebrow">Station</div><h1>'+escapeHtml(station.name)+'</h1>'
     + '<div class="page-subtitle">Electrical equipment installed at this station, plus station-level drawings and documents.</div></div></div>'
     + '<div class="tabs">'
-    + '<button class="tab-btn active" data-station-tab="equipment">Equipment</button>'
-    + '<button class="tab-btn" data-station-tab="drawings">Station Drawings</button>'
-    + '<button class="tab-btn" data-station-tab="earthpits">Earth Pits</button>'
-    + '<button class="tab-btn" data-station-tab="sld">Single Line Diagram (SLD)</button>'
+    + '<button class="tab-btn'+tabActive('equipment')+'" data-station-tab="equipment">Equipment</button>'
+    + '<button class="tab-btn'+tabActive('drawings')+'" data-station-tab="drawings">Station Drawings</button>'
+    + '<button class="tab-btn'+tabActive('earthpits')+'" data-station-tab="earthpits">Earth Pits</button>'
+    + '<button class="tab-btn'+tabActive('sld')+'" data-station-tab="sld">Single Line Diagram (SLD)</button>'
+    + (hasUPS ? '<button class="tab-btn'+tabActive('ups')+'" data-station-tab="ups">UPS</button>' : '')
     + '</div>'
-    + '<div class="tab-panel active" id="panel-station-equipment"></div>'
-    + '<div class="tab-panel" id="panel-station-drawings"></div>'
-    + '<div class="tab-panel" id="panel-station-earthpits"></div>'
-    + '<div class="tab-panel" id="panel-station-sld"></div>';
+    + (admin && !hasUPS ? '<div style="margin:10px 0 4px;"><button class="btn btn-outline btn-sm" id="add-ups-btn">+ Add UPS Installation</button></div>' : '')
+    + '<div class="tab-panel'+tabActive('equipment')+'" id="panel-station-equipment"></div>'
+    + '<div class="tab-panel'+tabActive('drawings')+'" id="panel-station-drawings"></div>'
+    + '<div class="tab-panel'+tabActive('earthpits')+'" id="panel-station-earthpits"></div>'
+    + '<div class="tab-panel'+tabActive('sld')+'" id="panel-station-sld"></div>'
+    + (hasUPS ? '<div class="tab-panel'+tabActive('ups')+'" id="panel-station-ups"></div>' : '');
 
   document.querySelectorAll('[data-station-tab]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       document.querySelectorAll('[data-station-tab]').forEach(b=>b.classList.remove('active'));
-      document.querySelectorAll('#panel-station-equipment, #panel-station-drawings, #panel-station-earthpits, #panel-station-sld').forEach(p=>p.classList.remove('active'));
+      document.querySelectorAll('#panel-station-equipment, #panel-station-drawings, #panel-station-earthpits, #panel-station-sld, #panel-station-ups').forEach(p=>p.classList.remove('active'));
       btn.classList.add('active');
       document.getElementById('panel-station-'+btn.dataset.stationTab).classList.add('active');
     });
@@ -969,6 +984,10 @@ function renderStationPage(stationId){
   renderStationDrawings(stationId);
   renderEarthPitsTab(stationId);
   renderSLDTab(stationId);
+  if(hasUPS) renderUPSTab(stationId);
+
+  const addUpsBtn = document.getElementById('add-ups-btn');
+  if(addUpsBtn) addUpsBtn.addEventListener('click', ()=>addUPSInstallation(stationId));
 }
 
 function renderStationEquipmentTab(stationId){
@@ -1857,6 +1876,193 @@ async function deleteSLD(stationId, sld){
     if(sld.fileId) driveDeleteFile(sld.fileId);
     toast('SLD deleted.', 'success');
     renderSLDTab(stationId);
+  } catch(e){ toast(e.message, 'error'); }
+}
+
+/* ============================================================
+   UPS INSTALLATION (per-station, admin-added only)
+   ============================================================ */
+async function addUPSInstallation(stationId){
+  try {
+    DB.stationUPS.push({ id: nextId('ups'), stationId, make:'', model:'', rating:'', configuration:'', serialNo:'', batteryAhCapacity:'', noOfBatteries:'', batteryMake:'', lastBatteryReplacementDate:'' });
+    await saveDb();
+    toast('UPS Installation added.', 'success');
+    renderStationPage(stationId, 'ups');
+  } catch(e){ toast(e.message, 'error'); }
+}
+
+async function removeUPSInstallation(stationId){
+  if(!confirm('Remove the UPS Installation section for this station? This will permanently delete the UPS details and all uploaded testing reports.')) return;
+  try {
+    const reportsToRemove = DB.upsTestReports.filter(r=>r.stationId===stationId);
+    DB.stationUPS = DB.stationUPS.filter(u=>u.stationId!==stationId);
+    DB.upsTestReports = DB.upsTestReports.filter(r=>r.stationId!==stationId);
+    await saveDb();
+    reportsToRemove.forEach(r=>{ if(r.fileId) driveDeleteFile(r.fileId); });
+    toast('UPS Installation removed.', 'success');
+    renderStationPage(stationId, 'equipment');
+  } catch(e){ toast(e.message, 'error'); }
+}
+
+function renderUPSTab(stationId){
+  const panel = document.getElementById('panel-station-ups');
+  if(!panel) return;
+
+  panel.innerHTML =
+    '<div class="tabs" style="margin-top:0;">'
+    + '<button class="tab-btn active" data-ups-tab="details">UPS Details</button>'
+    + '<button class="tab-btn" data-ups-tab="reports">UPS Testing Reports</button>'
+    + '</div>'
+    + '<div class="tab-panel active" id="panel-ups-details"></div>'
+    + '<div class="tab-panel" id="panel-ups-reports"></div>';
+
+  panel.querySelectorAll('[data-ups-tab]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      panel.querySelectorAll('[data-ups-tab]').forEach(b=>b.classList.remove('active'));
+      panel.querySelectorAll('#panel-ups-details, #panel-ups-reports').forEach(p=>p.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById('panel-ups-'+btn.dataset.upsTab).classList.add('active');
+    });
+  });
+
+  renderUPSDetailsTab(stationId, false);
+  renderUPSReportsTab(stationId);
+}
+
+const UPS_DETAIL_FIELDS = [
+  { key:'make', label:'UPS Make', type:'text' },
+  { key:'model', label:'Model', type:'text' },
+  { key:'rating', label:'Rating', type:'text' },
+  { key:'configuration', label:'Configuration', type:'text' },
+  { key:'serialNo', label:'S.No of the UPS', type:'text' },
+  { key:'batteryAhCapacity', label:'Battery AH Capacity', type:'text' },
+  { key:'noOfBatteries', label:'No. of Batteries', type:'text' },
+  { key:'batteryMake', label:'Battery Make', type:'text' },
+  { key:'lastBatteryReplacementDate', label:'Last Battery Replacement Date', type:'date' }
+];
+
+function renderUPSDetailsTab(stationId, editMode){
+  const panel = document.getElementById('panel-ups-details');
+  if(!panel) return;
+  const ups = DB.stationUPS.find(u=>u.stationId===stationId);
+  if(!ups) return;
+  const admin = isAdmin();
+
+  const cells = UPS_DETAIL_FIELDS.map(f=>{
+    const value = ups[f.key] || '';
+    return editMode
+      ? '<div class="spec-cell"><div class="spec-label">'+f.label+'</div><input type="'+f.type+'" data-field="'+f.key+'" value="'+escapeHtml(value)+'"></div>'
+      : '<div class="spec-cell"><div class="spec-label">'+f.label+'</div><div class="spec-value '+(value?'':'empty')+'">'+(value?escapeHtml(f.type==='date'?formatDateDMY(value):value):'Not recorded')+'</div></div>';
+  }).join('');
+
+  panel.innerHTML =
+    '<div class="spec-sheet"><div class="spec-sheet-header"><span>UPS Details</span>'
+    + '<div style="display:flex; gap:8px;">'
+    + (admin ? (editMode
+        ? '<button class="btn btn-outline btn-sm" id="ups-cancel">Cancel</button><button class="btn btn-primary btn-sm" id="ups-save">Save details</button>'
+        : '<button class="btn btn-ghost-light btn-sm" id="ups-edit">Edit details</button><button class="btn btn-danger btn-sm" id="ups-remove">Remove UPS Installation</button>') : '')
+    + '</div></div><div class="spec-grid">'+cells+'</div></div>';
+
+  if(admin){
+    if(editMode){
+      document.getElementById('ups-cancel').addEventListener('click', ()=>renderUPSDetailsTab(stationId, false));
+      document.getElementById('ups-save').addEventListener('click', async ()=>{
+        const payload = {};
+        panel.querySelectorAll('[data-field]').forEach(el=>{ payload[el.dataset.field] = el.value; });
+        try {
+          Object.assign(ups, payload);
+          await saveDb();
+          toast('UPS details saved.', 'success');
+          renderUPSDetailsTab(stationId, false);
+        } catch(e){ toast(e.message, 'error'); }
+      });
+    } else {
+      document.getElementById('ups-edit').addEventListener('click', ()=>renderUPSDetailsTab(stationId, true));
+      document.getElementById('ups-remove').addEventListener('click', ()=>removeUPSInstallation(stationId));
+    }
+  }
+}
+
+function renderUPSReportsTab(stationId){
+  const panel = document.getElementById('panel-ups-reports');
+  if(!panel) return;
+  const admin = isAdmin();
+  const reports = DB.upsTestReports.filter(r=>r.stationId===stationId).sort((a,b)=>(b.uploadedAt||'').localeCompare(a.uploadedAt||''));
+
+  const cards = reports.map(r=>
+    '<div class="drawing-card"><div class="drawing-icon">'+(getExtension(r.originalName)||'FILE').slice(0,4).toUpperCase()+'</div>'
+    + '<div class="drawing-title">'+escapeHtml(r.title)+'</div>'
+    + '<div class="drawing-sub">Uploaded '+formatDate(r.uploadedAt)+' &middot; '+((r.sizeBytes||0)/1024).toFixed(0)+' KB</div>'
+    + '<div class="drawing-card-footer"><div style="display:flex; gap:6px;">'
+    + '<button class="btn btn-outline btn-sm" data-upsdoc-view="'+r.id+'">View</button>'
+    + '<a class="btn btn-outline btn-sm" href="'+driveDownloadUrl(r.fileId)+'" target="_blank" rel="noopener">Download</a></div>'
+    + (admin ? '<button class="btn btn-danger btn-sm" data-upsdoc-delete="'+r.id+'">Delete</button>' : '')
+    + '</div></div>'
+  ).join('');
+
+  panel.innerHTML =
+    '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">'
+    + '<div class="page-subtitle" style="margin:0;">UPS testing reports for this station (PDF, JPG, JPEG, PNG).</div>'
+    + (admin ? '<button class="btn btn-primary btn-sm" id="add-upsdoc-btn">+ Upload report</button>' : '')
+    + '</div>'
+    + (reports.length===0
+      ? '<div class="empty-state"><h3>No testing reports uploaded yet</h3><p>'+(admin?'Upload the first report above.':'No testing reports have been uploaded yet.')+'</p></div>'
+      : '<div class="drawing-list">'+cards+'</div>');
+
+  panel.querySelectorAll('[data-upsdoc-view]').forEach(btn=>btn.addEventListener('click', ()=>{
+    const r = reports.find(x=>x.id===btn.dataset.upsdocView);
+    const ext = getExtension(r.originalName);
+    if(IMAGE_EXTENSIONS.includes(ext)) openPreviewModal({ kind:'drive-image', url:driveViewUrl(r.fileId), title:r.title });
+    else if(ext==='pdf') openPreviewModal({ kind:'drive-pdf', previewUrl:drivePdfPreviewUrl(r.fileId), title:r.title });
+    else openPreviewModal({ kind:'unsupported', downloadUrl:driveDownloadUrl(r.fileId), title:r.title });
+  }));
+
+  if(admin){
+    document.getElementById('add-upsdoc-btn').addEventListener('click', ()=>openUPSReportUploadModal(stationId));
+    panel.querySelectorAll('[data-upsdoc-delete]').forEach(btn=>btn.addEventListener('click', ()=>deleteUPSReport(btn.dataset.upsdocDelete, stationId)));
+  }
+}
+
+function openUPSReportUploadModal(stationId){
+  openModal(
+    'Upload UPS Testing Report',
+    '<div id="modal-form-error"></div>'
+    + '<div class="field"><label>Title</label><input type="text" id="upsdoc-title-input" placeholder="e.g. Annual Load Test Report"></div>'
+    + '<div class="field"><label>File (PDF, JPG, JPEG, PNG)</label><input type="file" id="upsdoc-file-input" accept=".pdf,.jpg,.jpeg,.png"></div>',
+    '<button class="btn btn-outline" id="modal-cancel-btn">Cancel</button><button class="btn btn-primary" id="modal-save-btn">Upload</button>'
+  );
+  document.getElementById('modal-cancel-btn').addEventListener('click', closeModal);
+  document.getElementById('modal-save-btn').addEventListener('click', async ()=>{
+    const title = document.getElementById('upsdoc-title-input').value.trim();
+    const fileInput = document.getElementById('upsdoc-file-input');
+    const errBox = document.getElementById('modal-form-error');
+    if(!fileInput.files.length){ errBox.innerHTML = '<div class="form-error">Please choose a file.</div>'; return; }
+    const file = fileInput.files[0];
+    const ext = getExtension(file.name);
+    if(!CONTRACT_DOC_EXTENSIONS.includes(ext)){ errBox.innerHTML = '<div class="form-error">File must be PDF, JPG, JPEG, or PNG.</div>'; return; }
+    const saveBtn = document.getElementById('modal-save-btn');
+    saveBtn.disabled = true; saveBtn.textContent = 'Uploading\u2026';
+    try {
+      const fileId = await driveUploadBinary(file, CONFIG.UPLOADS_FOLDER_ID);
+      await driveSetPublicReadable(fileId);
+      DB.upsTestReports.push({ id: nextId('upsdoc'), stationId, title: title||file.name, fileId, originalName: file.name, sizeBytes: file.size, uploadedAt: new Date().toISOString(), uploadedBy: currentUserEmail||'admin' });
+      await saveDb();
+      closeModal();
+      toast('Testing report uploaded.', 'success');
+      renderUPSReportsTab(stationId);
+    } catch(e){ errBox.innerHTML = '<div class="form-error">'+escapeHtml(e.message)+'</div>'; saveBtn.disabled=false; saveBtn.textContent='Upload'; }
+  });
+}
+
+async function deleteUPSReport(id, stationId){
+  if(!confirm('Delete this testing report?')) return;
+  const r = DB.upsTestReports.find(x=>x.id===id);
+  try {
+    DB.upsTestReports = DB.upsTestReports.filter(x=>x.id!==id);
+    await saveDb();
+    if(r && r.fileId) driveDeleteFile(r.fileId);
+    toast('Testing report deleted.', 'success');
+    renderUPSReportsTab(stationId);
   } catch(e){ toast(e.message, 'error'); }
 }
 
