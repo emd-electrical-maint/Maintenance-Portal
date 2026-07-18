@@ -918,7 +918,7 @@ async function deleteStation(id){
   try {
     const stationDrawingsToRemove = DB.stationDrawings.filter(d=>d.stationId===id);
     const yearIdsToRemove = DB.earthPitYears.filter(y=>y.stationId===id).map(y=>y.id);
-    const sldToRemove = DB.stationSLD.find(s=>s.stationId===id);
+    const sldsToRemove = DB.stationSLD.filter(s=>s.stationId===id);
     DB.stations = DB.stations.filter(s=>s.id!==id);
     DB.stationDrawings = DB.stationDrawings.filter(d=>d.stationId!==id);
     DB.earthPitYears = DB.earthPitYears.filter(y=>y.stationId!==id);
@@ -926,7 +926,7 @@ async function deleteStation(id){
     DB.stationSLD = DB.stationSLD.filter(s=>s.stationId!==id);
     await saveDb();
     stationDrawingsToRemove.forEach(d=>{ if(d.fileId) driveDeleteFile(d.fileId); });
-    if(sldToRemove && sldToRemove.fileId) driveDeleteFile(sldToRemove.fileId);
+    sldsToRemove.forEach(s=>{ if(s.fileId) driveDeleteFile(s.fileId); });
     toast('Station deleted.', 'success');
     renderHomePage();
   } catch(e){ toast(e.message, 'error'); }
@@ -1781,44 +1781,50 @@ function renderSLDTab(stationId){
   const panel = document.getElementById('panel-station-sld');
   if(!panel) return;
   const admin = isAdmin();
-  const sld = DB.stationSLD.find(s=>s.stationId===stationId);
+  const slds = DB.stationSLD.filter(s=>s.stationId===stationId).sort((a,b)=>(b.uploadedAt||'').localeCompare(a.uploadedAt||''));
+
+  const cards = slds.map(sld=>
+    '<div class="drawing-card"><div class="drawing-icon">'+(getExtension(sld.originalName)||'IMG').slice(0,4).toUpperCase()+'</div>'
+    + '<div class="drawing-title">'+escapeHtml(sld.title)+'</div>'
+    + '<div class="drawing-sub">Uploaded '+formatDate(sld.uploadedAt)+' &middot; '+((sld.sizeBytes||0)/1024).toFixed(0)+' KB</div>'
+    + '<div class="drawing-card-footer"><div style="display:flex; gap:6px;">'
+    + '<button class="btn btn-outline btn-sm" data-sld-view="'+sld.id+'">View</button>'
+    + '<a class="btn btn-outline btn-sm" href="'+driveDownloadUrl(sld.fileId)+'" target="_blank" rel="noopener">Download</a></div>'
+    + (admin ? '<button class="btn btn-danger btn-sm" data-sld-delete="'+sld.id+'">Delete</button>' : '')
+    + '</div></div>'
+  ).join('');
 
   panel.innerHTML =
     '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">'
-    + '<div class="page-subtitle" style="margin:0;">The current electrical Single Line Diagram for this station.</div>'
-    + (admin ? '<button class="btn btn-primary btn-sm" id="upload-sld-btn">'+(sld?'Replace SLD':'+ Upload SLD')+'</button>' : '')
+    + '<div class="page-subtitle" style="margin:0;">Electrical Single Line Diagrams for this station (add one per MCC where applicable).</div>'
+    + (admin ? '<button class="btn btn-primary btn-sm" id="upload-sld-btn">+ Upload SLD</button>' : '')
     + '</div>'
-    + (!sld
+    + (slds.length===0
       ? '<div class="empty-state"><h3>No Single Line Diagram uploaded yet</h3><p>'+(admin?'Upload the station SLD above.':'No SLD has been uploaded for this station yet.')+'</p></div>'
-      : '<div class="drawing-list"><div class="drawing-card">'
-        + '<div class="drawing-icon">'+(getExtension(sld.originalName)||'IMG').slice(0,4).toUpperCase()+'</div>'
-        + '<div class="drawing-title">'+escapeHtml(sld.title)+'</div>'
-        + '<div class="drawing-sub">Uploaded '+formatDate(sld.uploadedAt)+' &middot; '+((sld.sizeBytes||0)/1024).toFixed(0)+' KB</div>'
-        + '<div class="drawing-card-footer"><div style="display:flex; gap:6px;">'
-        + '<button class="btn btn-outline btn-sm" data-sld-view="'+sld.id+'">View</button>'
-        + '<a class="btn btn-outline btn-sm" href="'+driveDownloadUrl(sld.fileId)+'" target="_blank" rel="noopener">Download</a></div>'
-        + (admin ? '<button class="btn btn-danger btn-sm" data-sld-delete="'+sld.id+'">Delete</button>' : '')
-        + '</div></div></div>');
+      : '<div class="drawing-list">'+cards+'</div>');
 
-  const viewBtn = panel.querySelector('[data-sld-view]');
-  if(viewBtn) viewBtn.addEventListener('click', ()=>{
-    openPreviewModal({ kind:'drive-image', url:driveViewUrl(sld.fileId), title:sld.title });
-  });
+  panel.querySelectorAll('[data-sld-view]').forEach(btn=>btn.addEventListener('click', ()=>{
+    const sld = slds.find(s=>s.id===btn.dataset.sldView);
+    const ext = getExtension(sld.originalName);
+    if(IMAGE_EXTENSIONS.includes(ext)) openPreviewModal({ kind:'drive-image', url:driveViewUrl(sld.fileId), title:sld.title });
+    else openPreviewModal({ kind:'unsupported', downloadUrl:driveDownloadUrl(sld.fileId), title:sld.title });
+  }));
 
   if(!admin) return;
-  document.getElementById('upload-sld-btn').addEventListener('click', ()=>openSLDUploadModal(stationId, sld));
-  const deleteBtn = panel.querySelector('[data-sld-delete]');
-  if(deleteBtn) deleteBtn.addEventListener('click', ()=>deleteSLD(stationId, sld));
+  document.getElementById('upload-sld-btn').addEventListener('click', ()=>openSLDUploadModal(stationId));
+  panel.querySelectorAll('[data-sld-delete]').forEach(btn=>btn.addEventListener('click', ()=>{
+    const sld = slds.find(s=>s.id===btn.dataset.sldDelete);
+    deleteSLD(stationId, sld);
+  }));
 }
 
-function openSLDUploadModal(stationId, existing){
+function openSLDUploadModal(stationId){
   openModal(
-    existing ? 'Replace Single Line Diagram' : 'Upload Single Line Diagram',
+    'Upload Single Line Diagram',
     '<div id="modal-form-error"></div>'
-    + '<div class="field"><label>Drawing Name</label><input type="text" id="sld-title-input" value="'+(existing?escapeHtml(existing.title):'')+'" placeholder="e.g. Station SLD Rev 3"></div>'
-    + '<div class="field"><label>File (JPG, JPEG, PNG)</label><input type="file" id="sld-file-input" accept=".jpg,.jpeg,.png"></div>'
-    + (existing ? '<div class="helper-text">Uploading a new file will replace the current SLD.</div>' : ''),
-    '<button class="btn btn-outline" id="modal-cancel-btn">Cancel</button><button class="btn btn-primary" id="modal-save-btn">'+(existing?'Replace':'Upload')+'</button>'
+    + '<div class="field"><label>Drawing Name</label><input type="text" id="sld-title-input" placeholder="e.g. MCC-1 SLD Rev 3"></div>'
+    + '<div class="field"><label>File (JPG, JPEG, PNG)</label><input type="file" id="sld-file-input" accept=".jpg,.jpeg,.png"></div>',
+    '<button class="btn btn-outline" id="modal-cancel-btn">Cancel</button><button class="btn btn-primary" id="modal-save-btn">Upload</button>'
   );
   document.getElementById('modal-cancel-btn').addEventListener('click', closeModal);
   document.getElementById('modal-save-btn').addEventListener('click', async ()=>{
@@ -1834,20 +1840,17 @@ function openSLDUploadModal(stationId, existing){
     try {
       const fileId = await driveUploadBinary(file, CONFIG.UPLOADS_FOLDER_ID);
       await driveSetPublicReadable(fileId);
-      const oldFileId = existing ? existing.fileId : null;
-      DB.stationSLD = DB.stationSLD.filter(s=>s.stationId!==stationId);
       DB.stationSLD.push({ id: nextId('sld'), stationId, title: title||file.name, fileId, originalName: file.name, sizeBytes: file.size, uploadedAt: new Date().toISOString(), uploadedBy: currentUserEmail||'admin' });
       await saveDb();
-      if(oldFileId) driveDeleteFile(oldFileId);
       closeModal();
-      toast(existing ? 'SLD replaced.' : 'SLD uploaded.', 'success');
+      toast('SLD uploaded.', 'success');
       renderSLDTab(stationId);
-    } catch(e){ errBox.innerHTML = '<div class="form-error">'+escapeHtml(e.message)+'</div>'; saveBtn.disabled=false; saveBtn.textContent=existing?'Replace':'Upload'; }
+    } catch(e){ errBox.innerHTML = '<div class="form-error">'+escapeHtml(e.message)+'</div>'; saveBtn.disabled=false; saveBtn.textContent='Upload'; }
   });
 }
 
 async function deleteSLD(stationId, sld){
-  if(!confirm('Delete the Single Line Diagram for this station?')) return;
+  if(!confirm('Delete this Single Line Diagram?')) return;
   try {
     DB.stationSLD = DB.stationSLD.filter(s=>s.id!==sld.id);
     await saveDb();
