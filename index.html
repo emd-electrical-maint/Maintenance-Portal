@@ -6,7 +6,7 @@
 <title>Electrical Maintenance Portal — EMD, Bhilai Steel Plant</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='11' fill='%23d98e2b'/%3E%3Ctext x='32' y='41' font-family='Consolas,Menlo,monospace' font-size='21' font-weight='700' letter-spacing='-1' fill='%230d2033' text-anchor='middle'%3EEMD%3C/text%3E%3C/svg%3E">
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" defer></script>
+<script id="jspdf-script" src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" defer></script>
 <style>
 /* ============================================================
    EMD Electrical Maintenance Portal — single-file Drive edition
@@ -3464,6 +3464,7 @@ async function deleteBreakdownV2(id, equipmentId){
 
 /* ---- Equipment Breakdown Report (client-side PDF via jsPDF, mirrors the PM report) ---- */
 async function buildBreakdownV2ReportPdf(record, equipmentId){
+  await ensureJsPDFLoaded();
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ unit:'pt', format:'a4' });
   const pageW = doc.internal.pageSize.getWidth();
@@ -3835,6 +3836,32 @@ async function deletePM(id, equipmentId){
 }
 
 /* ---- PM Report generation (client-side PDF via jsPDF) ---- */
+function ensureJsPDFLoaded(){
+  return new Promise((resolve, reject)=>{
+    if(window.jspdf && window.jspdf.jsPDF){ resolve(); return; }
+    let settled = false;
+    const succeed = ()=>{ if(!settled && window.jspdf && window.jspdf.jsPDF){ settled = true; clearInterval(poll); resolve(); } };
+    const fail = (msg)=>{ if(!settled){ settled = true; clearInterval(poll); reject(new Error(msg)); } };
+    const existing = document.getElementById('jspdf-script');
+    if(existing){
+      existing.addEventListener('load', succeed);
+      existing.addEventListener('error', ()=>tryFallback());
+    }
+    // Poll in case the script already finished loading before this listener attached.
+    const poll = setInterval(succeed, 200);
+    setTimeout(()=>{ if(!settled) tryFallback(); }, 6000);
+    function tryFallback(){
+      if(settled) return;
+      const s = document.createElement('script');
+      s.src = 'https://unpkg.com/jspdf@2.5.1/dist/jspdf.umd.min.js';
+      s.onload = succeed;
+      s.onerror = ()=>fail('Could not load the PDF library. Check your internet connection (or ask your network admin to allow cdnjs.cloudflare.com / unpkg.com) and try again.');
+      document.head.appendChild(s);
+      setTimeout(()=>{ if(!settled) fail('Could not load the PDF library. Check your internet connection (or ask your network admin to allow cdnjs.cloudflare.com / unpkg.com) and try again.'); }, 8000);
+    }
+  });
+}
+
 function loadImageAsDataUrl(url){
   return new Promise((resolve)=>{
     const img = new Image();
@@ -3853,6 +3880,7 @@ function loadImageAsDataUrl(url){
 }
 
 async function buildPMReportPdf(record, equipmentId){
+  await ensureJsPDFLoaded();
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ unit:'pt', format:'a4' });
   const pageW = doc.internal.pageSize.getWidth();
