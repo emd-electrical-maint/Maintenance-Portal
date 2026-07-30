@@ -3433,17 +3433,26 @@ function openBreakdownModalV2(equipmentId, record){
         preventiveRecommendations: document.getElementById('bdf-prevent-reco').value.trim(),
         team, photos
       };
-      if(record){ Object.assign(record, fields); }
+      let newRecord = null, backup = null;
+      if(record){ backup = Object.assign({}, record); Object.assign(record, fields); }
       else {
-        DB.breakdownHistory.push(Object.assign({ id: nextId('bdv2'), equipmentId, recordedBy: currentUserEmail||'admin', createdAt: new Date().toISOString() }, fields));
+        newRecord = Object.assign({ id: nextId('bdv2'), equipmentId, recordedBy: currentUserEmail||'admin', createdAt: new Date().toISOString() }, fields);
+        DB.breakdownHistory.push(newRecord);
       }
-      await saveDb();
+      try {
+        await saveDb();
+      } catch(saveErr){
+        // Roll back the local mutation so it doesn't linger in this session only to vanish on refresh.
+        if(newRecord){ DB.breakdownHistory = DB.breakdownHistory.filter(r=>r!==newRecord); }
+        else if(record && backup){ Object.assign(record, backup); }
+        throw saveErr;
+      }
       closeModal();
       toast('Breakdown record saved.', 'success');
       renderBreakdown(equipmentId);
     } catch(e){
       console.error('Breakdown save failed:', e);
-      errBox.innerHTML = '<div class="form-error">'+escapeHtml(e.message||String(e))+'</div>';
+      errBox.innerHTML = '<div class="form-error">'+escapeHtml(e.message||String(e))+' (Nothing was saved -- please try again.)</div>';
       errBox.scrollIntoView({behavior:'smooth', block:'center'});
       saveBtn.disabled=false; saveBtn.textContent='Save';
     }
@@ -3806,17 +3815,25 @@ function openPMModal(equipmentId, record){
         }
       }
       const fields = { date, time, team, checklist: newChecklist, spares: newSpares, finalRemarks, photos };
-      if(record){ Object.assign(record, fields); }
+      let newRecord = null, backup = null;
+      if(record){ backup = Object.assign({}, record); Object.assign(record, fields); }
       else {
-        DB.pmRecords.push(Object.assign({ id: nextId('pm'), equipmentId, recordedBy: currentUserEmail||'admin', createdAt: new Date().toISOString() }, fields));
+        newRecord = Object.assign({ id: nextId('pm'), equipmentId, recordedBy: currentUserEmail||'admin', createdAt: new Date().toISOString() }, fields);
+        DB.pmRecords.push(newRecord);
       }
-      await saveDb();
+      try {
+        await saveDb();
+      } catch(saveErr){
+        if(newRecord){ DB.pmRecords = DB.pmRecords.filter(r=>r!==newRecord); }
+        else if(record && backup){ Object.assign(record, backup); }
+        throw saveErr;
+      }
       closeModal();
       toast('PM record saved.', 'success');
       renderPMTab(equipmentId);
     } catch(e){
       console.error('PM save failed:', e);
-      errBox.innerHTML = '<div class="form-error">'+escapeHtml(e.message||String(e))+'</div>';
+      errBox.innerHTML = '<div class="form-error">'+escapeHtml(e.message||String(e))+' (Nothing was saved -- please try again.)</div>';
       errBox.scrollIntoView({behavior:'smooth', block:'center'});
       saveBtn.disabled=false; saveBtn.textContent='Save';
     }
