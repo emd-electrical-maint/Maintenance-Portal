@@ -304,9 +304,30 @@ const DRIVE_FILES_URL = "https://www.googleapis.com/drive/v3/files";
    In-memory state
    ============================================================ */
 let DB = null;               // the whole portal dataset, mirrors old db.json shape
-let accessToken = null;      // Google OAuth token, only held in memory (never persisted)
+let accessToken = null;      // Google OAuth token; mirrored into sessionStorage so a page refresh doesn't sign you out
 let currentUserEmail = null;
+let tokenExpiresAt = 0;      // ms epoch; Google access tokens are short-lived (~1hr) regardless of storage
 let tokenClient = null;
+const AUTH_STORAGE_KEY = 'emdPortalAuth';
+
+function saveAuthToStorage(){
+  try { sessionStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify({ accessToken, currentUserEmail, tokenExpiresAt })); } catch(e){}
+}
+function loadAuthFromStorage(){
+  try {
+    const raw = sessionStorage.getItem(AUTH_STORAGE_KEY);
+    if(!raw) return;
+    const saved = JSON.parse(raw);
+    if(saved && saved.accessToken && saved.tokenExpiresAt && saved.tokenExpiresAt > Date.now()){
+      accessToken = saved.accessToken;
+      currentUserEmail = saved.currentUserEmail;
+      tokenExpiresAt = saved.tokenExpiresAt;
+    }
+  } catch(e){}
+}
+function clearAuthStorage(){
+  try { sessionStorage.removeItem(AUTH_STORAGE_KEY); } catch(e){}
+}
 let currentEquipmentCache = null; // convenience cache for the currently open equipment page
 
 function emptyDb() {
@@ -454,6 +475,12 @@ async function driveFetchAuthed(url, options){
   options = options || {};
   options.headers = Object.assign({}, options.headers, { Authorization: 'Bearer '+accessToken });
   const res = await fetch(url, options);
+  if(res.status === 401){
+    accessToken = null; currentUserEmail = null; tokenExpiresAt = 0;
+    clearAuthStorage();
+    renderTopbar();
+    throw new Error('Your session has expired. Please sign in again.');
+  }
   if(!res.ok){
     const text = await res.text().catch(()=> '');
     throw new Error('Drive request failed ('+res.status+'): '+text.slice(0,200));
@@ -594,17 +621,21 @@ function initAuth(){
     callback: async (resp) => {
       if(resp.error){ toast('Sign-in failed: '+resp.error, 'error'); return; }
       accessToken = resp.access_token;
+      tokenExpiresAt = Date.now() + (Number(resp.expires_in || 3300) * 1000); // Google typically returns 3600; small buffer for safety
       try {
         const info = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', { headers:{Authorization:'Bearer '+accessToken} }).then(r=>r.json());
         currentUserEmail = info.email;
         const allowList = [...CONFIG.ADMIN_EMAILS, ...CONFIG.OPERATOR_EMAILS];
         if(allowList.length && !allowList.includes(currentUserEmail)){
           toast('This Google account is not on the access list for this portal.', 'error');
-          accessToken = null; currentUserEmail = null;
+          accessToken = null; currentUserEmail = null; tokenExpiresAt = 0;
+          clearAuthStorage();
         } else {
           toast('Signed in as '+currentUserEmail, 'success');
+          saveAuthToStorage();
         }
       } catch(e){ console.warn(e); }
+      try { await loadDb(); } catch(e){ toast('Could not refresh portal data: '+e.message, 'error'); }
       renderTopbar();
       renderRoute();
     }
@@ -627,10 +658,12 @@ function login(){
   tokenClient.requestAccessToken({ prompt: currentUserEmail ? '' : 'consent' });
 }
 
-function logout(){
+async function logout(){
   if(accessToken){ google.accounts.oauth2.revoke(accessToken, ()=>{}); }
-  accessToken = null; currentUserEmail = null;
+  accessToken = null; currentUserEmail = null; tokenExpiresAt = 0;
+  clearAuthStorage();
   toast('Logged out.', 'success');
+  try { await loadDb(); } catch(e){ toast('Could not refresh portal data: '+e.message, 'error'); }
   renderTopbar();
   renderRoute();
 }
@@ -4140,7 +4173,26 @@ function renderSetupScreen(){
 /* ============================================================
    Boot
    ============================================================ */
+let pollTimer = null;
+function startAutoRefresh(){
+  if(pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(async ()=>{
+    const overlay = document.getElementById('modal-overlay');
+    if(overlay && overlay.style.display !== 'none') return; // don't disrupt someone mid-form
+    try {
+      const before = JSON.stringify(DB);
+      await loadDb();
+      if(JSON.stringify(DB) !== before){
+        const scrollY = window.scrollY;
+        renderRoute();
+        window.scrollTo(0, scrollY);
+      }
+    } catch(e){ console.warn('Auto-refresh failed:', e); }
+  }, 45000);
+}
+
 async function boot(){
+  loadAuthFromStorage();
   renderTopbar();
   renderFooter();
   initAuth();
@@ -4148,6 +4200,7 @@ async function boot(){
   try {
     await loadDb();
     renderRoute();
+    startAutoRefresh();
   } catch(e){
     document.getElementById('app').innerHTML = '<div class="empty-state"><h3>Could not load portal data</h3><p>'+escapeHtml(e.message)+'</p></div>';
   }
