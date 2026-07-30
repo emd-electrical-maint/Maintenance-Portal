@@ -3403,7 +3403,12 @@ function openPMModal(equipmentId, record){
       closeModal();
       toast('PM record saved.', 'success');
       renderPMTab(equipmentId);
-    } catch(e){ errBox.innerHTML = '<div class="form-error">'+escapeHtml(e.message)+'</div>'; saveBtn.disabled=false; saveBtn.textContent='Save'; }
+    } catch(e){
+      console.error('PM save failed:', e);
+      errBox.innerHTML = '<div class="form-error">'+escapeHtml(e.message||String(e))+'</div>';
+      errBox.scrollIntoView({behavior:'smooth', block:'center'});
+      saveBtn.disabled=false; saveBtn.textContent='Save';
+    }
   });
 }
 
