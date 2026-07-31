@@ -421,6 +421,12 @@ const BREAKDOWN_PHOTO_SLOTS = [
   { key: 'photo2', label: 'Photograph 2' },
   { key: 'photo3', label: 'Photograph 3' }
 ];
+const SHIFT_OPTIONS = ['A','B','C','General'];
+const STATION_BREAKDOWN_SEVERITY_OPTIONS = ['Minor','Major','Critical'];
+const STATION_EVENT_OPTIONS = ['Incomer Trip','Incomer Feeder Trip from Substation','Busbar Issue','Outgoing Feeder Trip','Complete Station Blackout','Power Dip','Power Failure','Earth Fault','Short Circuit','DC Supply Failure','Fire/Smoke','Lightning/Surge','UPS Failure','Planned Shutdown','Other'];
+const AFFECTED_AREA_OPTIONS = ['Entire Station','Section-1','Section-2','HT Side','All Equipment Tripped','Other'];
+const STATION_BREAKDOWN_CATEGORY_OPTIONS = ['Electrical','Process Issue / Interlock Failure','Mechanical','Instrumentation','Power Systems','Human Error','Other'];
+const STATION_CONTRIBUTING_FACTORS = ['Power Failure','Power dip','Cable failure','Loose connection','Loose terminal','Protection relay setting','Overall Interlock malfunction','Busbar fault','Flashover','Ageing equipment','Human error','Unknown','Other'];
 function formatDurationDHM(startDate, startTime, endDate, endTime){
   if(!startDate) return '\u2014';
   if(!endDate) return 'Ongoing';
@@ -1140,7 +1146,7 @@ async function deleteStation(id){
     const yearIdsToRemove = DB.earthPitYears.filter(y=>y.stationId===id).map(y=>y.id);
     const sldsToRemove = DB.stationSLD.filter(s=>s.stationId===id);
     const upsReportsToRemove = DB.upsTestReports.filter(r=>r.stationId===id);
-    const stationBreakdownImagesToRemove = DB.stationBreakdowns.filter(b=>b.stationId===id && b.imageFileId);
+    const stationBreakdownsToRemove = DB.stationBreakdowns.filter(b=>b.stationId===id);
     DB.stations = DB.stations.filter(s=>s.id!==id);
     DB.stationDrawings = DB.stationDrawings.filter(d=>d.stationId!==id);
     DB.earthPitYears = DB.earthPitYears.filter(y=>y.stationId!==id);
@@ -1153,7 +1159,10 @@ async function deleteStation(id){
     stationDrawingsToRemove.forEach(d=>{ if(d.fileId) driveDeleteFile(d.fileId); });
     sldsToRemove.forEach(s=>{ if(s.fileId) driveDeleteFile(s.fileId); });
     upsReportsToRemove.forEach(r=>{ if(r.fileId) driveDeleteFile(r.fileId); });
-    stationBreakdownImagesToRemove.forEach(b=>{ if(b.imageFileId) driveDeleteFile(b.imageFileId); });
+    stationBreakdownsToRemove.forEach(b=>{
+      if(b.imageFileId) driveDeleteFile(b.imageFileId); // legacy single-image field
+      if(b.formType==='v2' && b.photos){ BREAKDOWN_PHOTO_SLOTS.forEach(s=>{ const p=b.photos[s.key]; if(p && p.fileId) driveDeleteFile(p.fileId); }); }
+    });
     toast('Station deleted.', 'success');
     renderRoute();
   } catch(e){ toast(e.message, 'error'); }
@@ -1523,7 +1532,7 @@ function renderVibration(equipmentId){
     }).join('');
     return '<div class="spec-sheet" style="margin-bottom:16px;">'
       + '<div class="spec-sheet-header">'
-      + '<span>'+formatDate(r.date)+' &middot; '+escapeHtml(r.modeOfOperation||'\u2014')+'</span>'
+      + '<span>'+formatDate(r.date)+' &middot; '+escapeHtml(r.modeOfOperation||'\u2014')+(r.shopRefNo?' &middot; Shop Ref: '+escapeHtml(r.shopRefNo):'')+'</span>'
       + '<div style="display:flex; gap:8px;">'
       + (operator ? '<button class="btn btn-ghost-light btn-sm" data-vib-edit="'+r.id+'">Edit</button>' : '')
       + (admin ? '<button class="btn btn-ghost-light btn-sm" data-vib-delete="'+r.id+'">Delete</button>' : '')
@@ -1539,11 +1548,16 @@ function renderVibration(equipmentId){
   panel.innerHTML =
     '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">'
     + '<div class="page-subtitle" style="margin:0;">Vibration readings recorded during routine condition monitoring (H = Horizontal, V = Vertical, A = Axial, in mm/s). Most recent first.</div>'
+    + '<div style="display:flex; gap:8px; flex-shrink:0;">'
+    + '<button class="btn btn-outline btn-sm" id="vib-report-btn">Generate Report</button>'
     + (operator ? '<button class="btn btn-primary btn-sm" id="add-vib-btn">+ Add reading</button>' : '')
-    + '</div>'
+    + '</div></div>'
     + (records.length===0
       ? '<div class="empty-state"><h3>No vibration records yet</h3><p>'+(operator?'Add the first reading above.':'No readings have been logged for this equipment.')+'</p></div>'
       : cards);
+
+  const vibReportBtn = document.getElementById('vib-report-btn');
+  if(vibReportBtn) vibReportBtn.addEventListener('click', ()=>openVibrationReportRangeModal(equipmentId));
 
   if(operator){
     document.getElementById('add-vib-btn').addEventListener('click', ()=>openVibrationModal(equipmentId));
@@ -1571,6 +1585,7 @@ function openVibrationModal(equipmentId, record){
     '<div id="modal-form-error"></div>'
     + '<div class="field-row"><div class="field"><label>Date</label><input type="date" id="rf-date" value="'+(record?record.date:'')+'"></div>'
     + '<div class="field"><label>Mode of Operation</label><select id="rf-mode"><option value="" disabled '+(!record?'selected':'')+'>Select mode&hellip;</option>'+modeOptions+'</select></div></div>'
+    + '<div class="field"><label>Shop Reference No. (optional &mdash; helps identify which motor this reading is from, if it has since been replaced)</label><input type="text" id="rf-shopref" value="'+escapeHtml(record?record.shopRefNo||'':'')+'" placeholder="e.g. motor shop ref / serial no."></div>'
     + '<div class="field"><label>Vibration readings (mm/s)</label><table class="data-table"><thead><tr><th>Bearing</th><th>H (mm/s)</th><th>V (mm/s)</th><th>A (mm/s)</th></tr></thead><tbody>'+bearingRows+'</tbody></table></div>'
     + '<div class="field"><label>Remarks (optional)</label><textarea id="rf-remarks">'+escapeHtml(record?record.remarks:'')+'</textarea></div>',
     '<button class="btn btn-outline" id="modal-cancel-btn">Cancel</button><button class="btn btn-primary" id="modal-save-btn">Save</button>'
@@ -1586,10 +1601,11 @@ function openVibrationModal(equipmentId, record){
     const newReadings = {};
     VIB_BEARINGS.forEach(b=>{ newReadings[b] = {}; VIB_AXES.forEach(axis=>{ newReadings[b][axis] = document.getElementById('rf-'+b+'-'+axis).value; }); });
     const remarks = document.getElementById('rf-remarks').value.trim();
+    const shopRefNo = document.getElementById('rf-shopref').value.trim();
     try {
-      if(record){ record.date=date; record.modeOfOperation=modeOfOperation; record.readings=newReadings; record.remarks=remarks; }
+      if(record){ record.date=date; record.modeOfOperation=modeOfOperation; record.readings=newReadings; record.remarks=remarks; record.shopRefNo=shopRefNo; }
       else {
-        DB.vibrationRecords.push({ id: nextId('vib'), equipmentId, date, modeOfOperation, readings: newReadings, remarks, recordedBy: currentUserEmail||'admin', createdAt: new Date().toISOString() });
+        DB.vibrationRecords.push({ id: nextId('vib'), equipmentId, date, modeOfOperation, readings: newReadings, remarks, shopRefNo, recordedBy: currentUserEmail||'admin', createdAt: new Date().toISOString() });
       }
       await saveDb();
       closeModal();
@@ -1607,6 +1623,151 @@ async function deleteVibration(id, equipmentId){
     toast('Record deleted.', 'success');
     renderVibration(equipmentId);
   } catch(e){ toast(e.message, 'error'); }
+}
+
+/* ---- Vibration Records report (client-side PDF, optional date range) ---- */
+function openVibrationReportRangeModal(equipmentId){
+  openModal(
+    'Generate Vibration Report',
+    '<div id="modal-form-error"></div>'
+    + '<p class="helper-text">Leave both dates blank to include every record on file for this equipment.</p>'
+    + '<div class="field-row"><div class="field"><label>From (optional)</label><input type="date" id="vibrep-from"></div>'
+    + '<div class="field"><label>To (optional)</label><input type="date" id="vibrep-to"></div></div>',
+    '<button class="btn btn-outline" id="modal-cancel-btn">Cancel</button><button class="btn btn-primary" id="modal-save-btn">Generate</button>'
+  );
+  document.getElementById('modal-cancel-btn').addEventListener('click', closeModal);
+  document.getElementById('modal-save-btn').addEventListener('click', ()=>{
+    const from = document.getElementById('vibrep-from').value;
+    const to = document.getElementById('vibrep-to').value;
+    if(from && to && from > to){
+      document.getElementById('modal-form-error').innerHTML = '<div class="form-error">"From" date must be before "To" date.</div>';
+      return;
+    }
+    openVibrationReportModal(equipmentId, from, to);
+  });
+}
+
+async function buildVibrationReportPdf(equipmentId, fromDate, toDate){
+  await ensureJsPDFLoaded();
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit:'pt', format:'a4' });
+  const pageW = doc.internal.pageSize.getWidth();
+  const pageH = doc.internal.pageSize.getHeight();
+  const margin = 40;
+  let y = margin;
+
+  const equipmentItem = DB.equipment.find(e=>e.id===equipmentId);
+  const station = equipmentItem ? DB.stations.find(s=>s.id===equipmentItem.stationId) : null;
+  const records = DB.vibrationRecords
+    .filter(r=>r.equipmentId===equipmentId)
+    .filter(r=>(!fromDate || r.date>=fromDate) && (!toDate || r.date<=toDate))
+    .sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+
+  const ensureSpace = (needed)=>{ if(y + needed > pageH - margin){ doc.addPage(); y = margin; } };
+
+  try { if(SAIL_LOGO_DATA_URI) doc.addImage(SAIL_LOGO_DATA_URI, 'PNG', margin, y, 60, 40); } catch(e){}
+  doc.setFont('helvetica','bold'); doc.setFontSize(16);
+  doc.text('EMD Electrical Maintenance', margin+70, y+20);
+  doc.setFont('helvetica','normal'); doc.setFontSize(11);
+  doc.text('Vibration Records Report', margin+70, y+38);
+  y += 58;
+  doc.setDrawColor(217,142,43); doc.setLineWidth(1.5);
+  doc.line(margin, y, pageW-margin, y);
+  y += 20;
+
+  const rangeLabel = (fromDate||toDate) ? (formatDateDMY(fromDate)||'Start')+' to '+(formatDateDMY(toDate)||'Present') : 'All records on file';
+  [['Station:', station?station.name:'\u2014'], ['Equipment:', equipmentItem?equipmentItem.name:'\u2014'], ['Date Range:', rangeLabel], ['Total Records:', String(records.length)]].forEach(([label,value])=>{
+    const maxWidth = pageW-margin*2;
+    ensureSpace(pdfFieldHeight(doc, maxWidth, value));
+    y = pdfField(doc, margin, y, maxWidth, label, value);
+  });
+  y += 10;
+
+  if(records.length===0){
+    ensureSpace(20);
+    doc.setFont('helvetica','normal'); doc.setFontSize(10);
+    doc.text('No vibration records found in this range.', margin, y);
+  }
+
+  records.forEach(r=>{
+    ensureSpace(28);
+    doc.setDrawColor(200,200,200); doc.setLineWidth(0.5);
+    doc.line(margin, y, pageW-margin, y);
+    y += 16;
+    doc.setFont('helvetica','bold'); doc.setFontSize(11);
+    doc.text(formatDateDMY(r.date)+'  \u00b7  '+(r.modeOfOperation||'\u2014')+(r.shopRefNo?'  \u00b7  Shop Ref: '+r.shopRefNo:''), margin, y);
+    y += 16;
+
+    const colX = [margin, margin+80, margin+220, margin+360];
+    doc.setFont('helvetica','bold'); doc.setFontSize(9);
+    doc.text('Bearing', colX[0], y); doc.text('H (mm/s)', colX[1], y); doc.text('V (mm/s)', colX[2], y); doc.text('A (mm/s)', colX[3], y);
+    y += 12;
+    doc.setFont('helvetica','normal'); doc.setFontSize(9);
+    VIB_BEARINGS.forEach(b=>{
+      ensureSpace(13);
+      const row = (r.readings && r.readings[b]) || {};
+      doc.text(b, colX[0], y);
+      VIB_AXES.forEach((axis,i)=>{ doc.text(String(row[axis]!==undefined && row[axis]!=='' ? row[axis] : '\u2014'), colX[i+1], y); });
+      y += 13;
+    });
+    if(r.remarks){
+      const maxWidth = pageW-margin*2;
+      ensureSpace(pdfFieldHeight(doc, maxWidth, r.remarks));
+      y = pdfField(doc, margin, y, maxWidth, 'Remarks:', r.remarks);
+    }
+    y += 8;
+  });
+
+  const totalPages = doc.internal.getNumberOfPages();
+  for(let p=1; p<=totalPages; p++){
+    doc.setPage(p);
+    doc.setFont('helvetica','normal'); doc.setFontSize(8); doc.setTextColor(140,140,140);
+    doc.text('Page '+p+' / '+totalPages, pageW-margin-60, pageH-20);
+    doc.setTextColor(0,0,0);
+  }
+  return doc;
+}
+
+async function openVibrationReportModal(equipmentId, fromDate, toDate){
+  const equipmentItem = DB.equipment.find(e=>e.id===equipmentId);
+  const fileNameBase = 'Vibration_Report_'+(equipmentItem?equipmentItem.name.replace(/[^a-z0-9]+/gi,'_'):'Equipment');
+
+  openModal(
+    'Vibration Records Report',
+    '<div id="pm-report-status" class="helper-text">Generating report\u2026</div><div id="pm-report-preview" style="margin-top:10px;"></div>',
+    '<button class="btn btn-outline" id="pm-report-close-btn">Close</button>'
+    + '<button class="btn btn-outline" id="pm-report-regenerate-btn">Regenerate</button>'
+    + '<button class="btn btn-primary" id="pm-report-download-btn" disabled>Download</button>'
+  );
+  document.querySelector('#modal-overlay .modal').style.maxWidth = '820px';
+  document.getElementById('pm-report-close-btn').addEventListener('click', closeModal);
+
+  let currentBlobUrl = null;
+  const render = async ()=>{
+    const statusEl = document.getElementById('pm-report-status');
+    const previewEl = document.getElementById('pm-report-preview');
+    const downloadBtn = document.getElementById('pm-report-download-btn');
+    if(!statusEl || !previewEl) return;
+    statusEl.textContent = 'Generating report\u2026';
+    downloadBtn.disabled = true;
+    try {
+      const doc = await buildVibrationReportPdf(equipmentId, fromDate, toDate);
+      const blob = doc.output('blob');
+      if(currentBlobUrl) URL.revokeObjectURL(currentBlobUrl);
+      currentBlobUrl = URL.createObjectURL(blob);
+      const totalPages = doc.internal.getNumberOfPages();
+      statusEl.textContent = 'Page 1 / '+totalPages;
+      previewEl.innerHTML = '<iframe src="'+currentBlobUrl+'" style="width:100%; height:60vh; border:1px solid var(--color-border); border-radius:6px;"></iframe>';
+      downloadBtn.disabled = false;
+      downloadBtn.onclick = ()=>{
+        const a = document.createElement('a');
+        a.href = currentBlobUrl; a.download = fileNameBase+'.pdf';
+        document.body.appendChild(a); a.click(); a.remove();
+      };
+    } catch(e){ statusEl.textContent = 'Could not generate report: '+e.message; }
+  };
+  document.getElementById('pm-report-regenerate-btn').addEventListener('click', render);
+  render();
 }
 
 /* ---- Drawing attachments ---- */
@@ -2032,13 +2193,20 @@ function openEarthPitModal(stationId, yearId, record){
     };
     EARTHPIT_STATUS_FIELDS.forEach(f=>{ fields[f.key] = document.getElementById('ep-'+f.key+'-input').value; });
     try {
-      if(record){ Object.assign(record, fields); }
-      else { DB.earthPitRecords.push(Object.assign({ id: nextId('epr'), stationId, yearId, createdAt: new Date().toISOString() }, fields)); }
-      await saveDb();
+      let newRecord = null, backup = null;
+      if(record){ backup = Object.assign({}, record); Object.assign(record, fields); }
+      else { newRecord = Object.assign({ id: nextId('epr'), stationId, yearId, createdAt: new Date().toISOString() }, fields); DB.earthPitRecords.push(newRecord); }
+      try {
+        await saveDb();
+      } catch(saveErr){
+        if(newRecord){ DB.earthPitRecords = DB.earthPitRecords.filter(r=>r!==newRecord); }
+        else if(record && backup){ Object.assign(record, backup); }
+        throw saveErr;
+      }
       closeModal();
       toast('Earth pit reading saved.', 'success');
       renderEarthPitRegister(stationId, yearId);
-    } catch(e){ errBox.innerHTML = '<div class="form-error">'+escapeHtml(e.message)+'</div>'; }
+    } catch(e){ errBox.innerHTML = '<div class="form-error">'+escapeHtml(e.message)+' (Nothing was saved -- please try again.)</div>'; }
   });
 }
 
@@ -2137,7 +2305,62 @@ function renderStationBreakdownTab(stationId){
   if(!panel) return;
   const admin = isAdmin();
   const operator = isOperator();
-  const records = DB.stationBreakdowns.filter(b=>b.stationId===stationId).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  const allRecords = DB.stationBreakdowns.filter(b=>b.stationId===stationId);
+  const v2Records = allRecords.filter(b=>b.formType==='v2').sort((a,b)=>(b.breakdownDate||'').localeCompare(a.breakdownDate||''));
+  const records = allRecords.filter(b=>b.formType!=='v2').sort((a,b)=>(b.date||'').localeCompare(a.date||'')); // legacy records, untouched logic below
+
+  const stationEquipment = DB.equipment.filter(e=>e.stationId===stationId);
+
+  const v2Cards = v2Records.map(r=>{
+    const downtime = formatDurationDHM(r.breakdownDate, r.breakdownTime, r.restoredDate, r.restoredTime);
+    const isOpen = !r.restoredDate;
+    const eventLabel = r.stationEvent==='Other' ? (r.stationEventOther||'Other') : r.stationEvent;
+    const areas = (r.affectedArea||[]).map(a=>a==='Other'?(r.affectedAreaOther||'Other'):a);
+    const factors = (r.contributingFactors||[]).map(f=>f==='Other'?(r.contributingFactorsOther||'Other'):f);
+    const affectedEquipNames = (r.affectedEquipment||[]).map(id=>{ const e = DB.equipment.find(x=>x.id===id); return e?e.name:null; }).filter(Boolean);
+    const parts = (r.partsReplaced||[]).filter(p=>p.item);
+    const photoThumbs = BREAKDOWN_PHOTO_SLOTS.map(slot=>{
+      const p = r.photos && r.photos[slot.key];
+      if(!p || !p.fileId) return '';
+      return '<div style="text-align:center;"><img src="'+driveViewUrl(p.fileId)+'" alt="'+slot.label+'" data-sbdv2-photo="'+r.id+'|'+slot.key+'" style="width:64px;height:64px;object-fit:cover;border-radius:4px;border:1px solid var(--color-border);cursor:pointer;"><div style="font-size:11px; color:var(--color-text-muted); margin-top:4px;">'+slot.label+'</div></div>';
+    }).join('');
+
+    return '<div class="spec-sheet" style="margin-bottom:16px;">'
+      + '<div class="spec-sheet-header">'
+      + '<span>'+formatDate(r.breakdownDate)+(r.description?' &middot; '+escapeHtml(r.description):'')+(r.severity?' &middot; '+escapeHtml(r.severity):'')+(isOpen?' &middot; <span class="flag flag-warn" style="padding:2px 8px;border-radius:20px;font-weight:600;background:var(--color-danger-bg);color:#fff;">Open</span>':'')+'</span>'
+      + '<div style="display:flex; gap:8px;">'
+      + '<button class="btn btn-ghost-light btn-sm" data-sbdv2-report="'+r.id+'">Generate Report</button>'
+      + (operator ? '<button class="btn btn-ghost-light btn-sm" data-sbdv2-edit="'+r.id+'">Edit</button>' : '')
+      + (admin ? '<button class="btn btn-ghost-light btn-sm" data-sbdv2-delete="'+r.id+'">Delete</button>' : '')
+      + '</div></div>'
+      + '<div class="spec-grid">'
+      + '<div class="spec-cell"><div class="spec-label">Shift</div><div class="spec-value" style="font-family:var(--font-body); font-weight:400;">'+escapeHtml(r.shift||'\u2014')+'</div></div>'
+      + '<div class="spec-cell"><div class="spec-label">Breakdown</div><div class="spec-value" style="font-family:var(--font-body); font-weight:400;">'+formatDateDMY(r.breakdownDate)+' '+(r.breakdownTime||'')+'</div></div>'
+      + '<div class="spec-cell"><div class="spec-label">Restored</div><div class="spec-value '+(r.restoredDate?'':'empty')+'" style="font-family:var(--font-body); font-weight:400;">'+(r.restoredDate?(formatDateDMY(r.restoredDate)+' '+(r.restoredTime||'')):'Ongoing')+'</div></div>'
+      + '<div class="spec-cell"><div class="spec-label">Downtime</div><div class="spec-value" style="font-family:var(--font-mono);">'+downtime+'</div></div>'
+      + '<div class="spec-cell"><div class="spec-label">Station Event</div><div class="spec-value" style="font-family:var(--font-body); font-weight:400;">'+escapeHtml(eventLabel||'\u2014')+'</div></div>'
+      + '<div class="spec-cell"><div class="spec-label">Affected Area</div><div class="spec-value '+(areas.length?'':'empty')+'" style="font-family:var(--font-body); font-weight:400;">'+(areas.length?escapeHtml(areas.join(', ')):'\u2014')+'</div></div>'
+      + '<div class="spec-cell"><div class="spec-label">Breakdown Category</div><div class="spec-value" style="font-family:var(--font-body); font-weight:400;">'+escapeHtml(r.category||'\u2014')+'</div></div>'
+      + '<div class="spec-cell"><div class="spec-label">Repeat Breakdown?</div><div class="spec-value" style="font-family:var(--font-body); font-weight:400;">'+escapeHtml(r.repeatBreakdown||'\u2014')+'</div></div>'
+      + '<div class="spec-cell"><div class="spec-label">Attended By</div><div class="spec-value '+((r.team||[]).length?'':'empty')+'" style="font-family:var(--font-body); font-weight:400;">'+((r.team||[]).length?escapeHtml(r.team.join(', ')):'Not recorded')+'</div></div>'
+      + '</div>'
+      + '<details style="padding:0 16px 12px;"><summary style="cursor:pointer; padding:8px 0; font-weight:600; font-size:13px;">View full report details</summary>'
+      + '<div class="spec-grid">'
+      + '<div class="spec-cell notes-cell"><div class="spec-label">Sequence of Events</div><div class="spec-value '+(r.sequenceOfEvents?'':'empty')+'" style="font-family:var(--font-body); font-weight:400;">'+(r.sequenceOfEvents?escapeHtml(r.sequenceOfEvents):'\u2014')+'</div></div>'
+      + '<div class="spec-cell notes-cell"><div class="spec-label">Immediate Cause</div><div class="spec-value '+(r.immediateCause?'':'empty')+'" style="font-family:var(--font-body); font-weight:400;">'+(r.immediateCause?escapeHtml(r.immediateCause):'\u2014')+'</div></div>'
+      + '<div class="spec-cell notes-cell"><div class="spec-label">Root Cause</div><div class="spec-value '+(r.rootCause?'':'empty')+'" style="font-family:var(--font-body); font-weight:400;">'+(r.rootCause?escapeHtml(r.rootCause):'\u2014')+'</div></div>'
+      + '<div class="spec-cell notes-cell"><div class="spec-label">Contributing Factors</div><div class="spec-value '+(factors.length?'':'empty')+'" style="font-family:var(--font-body); font-weight:400;">'+(factors.length?escapeHtml(factors.join(', ')):'\u2014')+'</div></div>'
+      + '<div class="spec-cell notes-cell"><div class="spec-label">Affected Equipment</div><div class="spec-value '+(affectedEquipNames.length?'':'empty')+'" style="font-family:var(--font-body); font-weight:400;">'+(affectedEquipNames.length?escapeHtml(affectedEquipNames.join(', ')):'\u2014')+'</div></div>'
+      + '<div class="spec-cell notes-cell"><div class="spec-label">Corrective Action Taken</div><div class="spec-value '+(r.correctiveAction?'':'empty')+'" style="font-family:var(--font-body); font-weight:400;">'+(r.correctiveAction?escapeHtml(r.correctiveAction):'\u2014')+'</div></div>'
+      + (parts.length ? '<div class="spec-cell notes-cell"><div class="spec-label">Parts Replaced</div><table class="data-table" style="border:none; border-radius:0; box-shadow:none;"><thead><tr><th>Item</th><th>Qty</th></tr></thead><tbody>'+parts.map(p=>'<tr><td>'+escapeHtml(p.item)+'</td><td class="mono">'+escapeHtml(p.qty||'')+'</td></tr>').join('')+'</tbody></table></div>' : '')
+      + '<div class="spec-cell notes-cell"><div class="spec-label">Station Handed Over To</div><div class="spec-value '+(r.handedOverTo?'':'empty')+'" style="font-family:var(--font-body); font-weight:400;">'+(r.handedOverTo?escapeHtml(r.handedOverTo):'\u2014')+'</div></div>'
+      + '<div class="spec-cell"><div class="spec-label">Station Operating Normally?</div><div class="spec-value" style="font-family:var(--font-body); font-weight:400;">'+escapeHtml(r.operatingNormally||'\u2014')+'</div></div>'
+      + '<div class="spec-cell"><div class="spec-label">Monitoring Required?</div><div class="spec-value" style="font-family:var(--font-body); font-weight:400;">'+escapeHtml(r.monitoringRequired||'\u2014')+(r.monitoringRequired==='Yes'&&r.monitoringDetails?' &mdash; '+escapeHtml(r.monitoringDetails):'')+'</div></div>'
+      + '<div class="spec-cell notes-cell"><div class="spec-label">Preventive Recommendation</div><div class="spec-value '+(r.preventiveRecommendation?'':'empty')+'" style="font-family:var(--font-body); font-weight:400;">'+(r.preventiveRecommendation?escapeHtml(r.preventiveRecommendation):'\u2014')+'</div></div>'
+      + '</div></details>'
+      + (photoThumbs ? '<div style="display:flex; gap:16px; padding:0 16px 16px;">'+photoThumbs+'</div>' : '')
+      + '</div>';
+  }).join('');
 
   const rows = records.map(r=>
     '<tr><td class="mono">'+formatDate(r.date)+'</td><td>'+escapeHtml(r.incidentType||'\u2014')+'</td><td>'+escapeHtml(r.description)+'</td>'
@@ -2157,9 +2380,10 @@ function renderStationBreakdownTab(stationId){
     + '<div class="page-subtitle" style="margin:0;">Station-wide incidents not tied to a single piece of equipment &mdash; feeder trips, fires, alarm failures, UPS failures, arc flash, control supply issues, etc.</div>'
     + (operator ? '<button class="btn btn-primary btn-sm" id="add-sbd-btn">+ Add breakdown record</button>' : '')
     + '</div>'
-    + (records.length===0
+    + v2Cards
+    + (records.length===0 && v2Records.length===0
       ? '<div class="empty-state"><h3>No breakdown history</h3><p>'+(operator?'Log the first incident above.':'No station-level breakdowns have been recorded.')+'</p></div>'
-      : '<div style="overflow-x:auto;"><table class="data-table"><thead><tr><th>Date</th><th>Incident Type / Equipment Involved</th><th>Description</th><th>Downtime (hrs)</th><th>Root Cause</th><th>Action Taken</th><th>Restored On</th><th>Image</th>'+(operator?'<th></th>':'')+'</tr></thead><tbody>'+rows+'</tbody></table></div>');
+      : (records.length===0 ? '' : '<div style="overflow-x:auto;"><table class="data-table"><thead><tr><th>Date</th><th>Incident Type / Equipment Involved</th><th>Description</th><th>Downtime (hrs)</th><th>Root Cause</th><th>Action Taken</th><th>Restored On</th><th>Image</th>'+(operator?'<th></th>':'')+'</tr></thead><tbody>'+rows+'</tbody></table></div>'));
 
   panel.querySelectorAll('[data-sbd-image]').forEach(img=>{
     img.addEventListener('click', ()=>{
@@ -2167,16 +2391,33 @@ function renderStationBreakdownTab(stationId){
       openPreviewModal({ kind:'drive-image', url:driveViewUrl(rec.imageFileId), title:'Breakdown photo' });
     });
   });
+  panel.querySelectorAll('[data-sbdv2-photo]').forEach(img=>{
+    img.addEventListener('click', ()=>{
+      const [rid, slotKey] = img.dataset.sbdv2Photo.split('|');
+      const rec = v2Records.find(r=>r.id===rid);
+      const p = rec.photos[slotKey];
+      openPreviewModal({ kind:'drive-image', url:driveViewUrl(p.fileId), title:BREAKDOWN_PHOTO_SLOTS.find(s=>s.key===slotKey).label });
+    });
+  });
+  panel.querySelectorAll('[data-sbdv2-report]').forEach(btn=>btn.addEventListener('click', ()=>{
+    const rec = v2Records.find(r=>r.id===btn.dataset.sbdv2Report);
+    openStationBreakdownV2ReportModal(rec, stationId);
+  }));
 
   if(operator){
-    document.getElementById('add-sbd-btn').addEventListener('click', ()=>openStationBreakdownModal(stationId));
+    document.getElementById('add-sbd-btn').addEventListener('click', ()=>openStationBreakdownModalV2(stationId));
     panel.querySelectorAll('[data-sbd-edit]').forEach(btn=>btn.addEventListener('click', ()=>{
       const rec = records.find(r=>r.id===btn.dataset.sbdEdit);
       openStationBreakdownModal(stationId, rec);
     }));
+    panel.querySelectorAll('[data-sbdv2-edit]').forEach(btn=>btn.addEventListener('click', ()=>{
+      const rec = v2Records.find(r=>r.id===btn.dataset.sbdv2Edit);
+      openStationBreakdownModalV2(stationId, rec);
+    }));
   }
   if(admin){
     panel.querySelectorAll('[data-sbd-delete]').forEach(btn=>btn.addEventListener('click', ()=>deleteStationBreakdown(btn.dataset.sbdDelete, stationId)));
+    panel.querySelectorAll('[data-sbdv2-delete]').forEach(btn=>btn.addEventListener('click', ()=>deleteStationBreakdownV2(btn.dataset.sbdv2Delete, stationId)));
   }
 }
 
@@ -2231,15 +2472,23 @@ function openStationBreakdownModal(stationId, record){
         restoredOn: document.getElementById('sbf-restored').value || '',
         imageFileId, imageOriginalName
       };
-      if(record){ Object.assign(record, fields); }
+      let newRecord = null, backup = null;
+      if(record){ backup = Object.assign({}, record); Object.assign(record, fields); }
       else {
-        DB.stationBreakdowns.push(Object.assign({ id: nextId('sbdn'), stationId, recordedBy: currentUserEmail||'admin', createdAt: new Date().toISOString() }, fields));
+        newRecord = Object.assign({ id: nextId('sbdn'), stationId, recordedBy: currentUserEmail||'admin', createdAt: new Date().toISOString() }, fields);
+        DB.stationBreakdowns.push(newRecord);
       }
-      await saveDb();
+      try {
+        await saveDb();
+      } catch(saveErr){
+        if(newRecord){ DB.stationBreakdowns = DB.stationBreakdowns.filter(r=>r!==newRecord); }
+        else if(record && backup){ Object.assign(record, backup); }
+        throw saveErr;
+      }
       closeModal();
       toast('Breakdown record saved.', 'success');
       renderStationBreakdownTab(stationId);
-    } catch(e){ errBox.innerHTML = '<div class="form-error">'+escapeHtml(e.message)+'</div>'; saveBtn.disabled=false; saveBtn.textContent='Save'; }
+    } catch(e){ errBox.innerHTML = '<div class="form-error">'+escapeHtml(e.message)+' (Nothing was saved -- please try again.)</div>'; saveBtn.disabled=false; saveBtn.textContent='Save'; }
   });
 }
 
@@ -2253,6 +2502,373 @@ async function deleteStationBreakdown(id, stationId){
     toast('Record deleted.', 'success');
     renderStationBreakdownTab(stationId);
   } catch(e){ toast(e.message, 'error'); }
+}
+
+/* ============================================================
+   STATION BREAKDOWN HISTORY - NEW FORMAT (formType: 'v2')
+   Coexists with the untouched legacy station breakdown records above;
+   new entries always use this richer form, legacy entries keep
+   displaying/editing exactly as before via openStationBreakdownModal.
+   ============================================================ */
+function openStationBreakdownModalV2(stationId, record){
+  const teamMembers = getAllTeamMembers();
+  const selectedTeam = (record && record.team) || [];
+  const selectedAreas = (record && record.affectedArea) || [];
+  const selectedFactors = (record && record.contributingFactors) || [];
+  const selectedEquipment = (record && record.affectedEquipment) || [];
+  const stationEquipment = DB.equipment.filter(e=>e.stationId===stationId);
+  const parts = (record && record.partsReplaced && record.partsReplaced.length) ? record.partsReplaced : [{item:'',qty:''}];
+
+  const teamCheckboxes = teamMembers.length
+    ? teamMembers.map(name=>'<label style="display:flex; align-items:center; gap:6px; font-weight:400; padding:3px 0;"><input type="checkbox" class="sbdv2-team-cb" value="'+escapeHtml(name)+'" '+(selectedTeam.includes(name)?'checked':'')+'> '+escapeHtml(name)+'</label>').join('')
+    : '<div class="helper-text">No team members found. Add people under Our Team first.</div>';
+  const equipmentCheckboxes = stationEquipment.length
+    ? stationEquipment.map(e=>'<label style="display:flex; align-items:center; gap:6px; font-weight:400; padding:3px 0;"><input type="checkbox" class="sbdv2-equip-cb" value="'+e.id+'" '+(selectedEquipment.includes(e.id)?'checked':'')+'> '+escapeHtml(e.name)+'</label>').join('')
+    : '<div class="helper-text">No equipment recorded for this station yet.</div>';
+
+  const shiftOptionsHtml = SHIFT_OPTIONS.map(s=>'<option value="'+s+'" '+((record&&record.shift)===s?'selected':'')+'>'+s+'</option>').join('');
+  const severityOptionsHtml = STATION_BREAKDOWN_SEVERITY_OPTIONS.map(s=>'<option value="'+s+'" '+((record&&record.severity)===s?'selected':'')+'>'+s+'</option>').join('');
+  const eventOptionsHtml = STATION_EVENT_OPTIONS.map(opt=>'<option value="'+escapeHtml(opt)+'" '+((record&&record.stationEvent)===opt?'selected':'')+'>'+escapeHtml(opt)+'</option>').join('');
+  const categoryOptionsHtml = STATION_BREAKDOWN_CATEGORY_OPTIONS.map(opt=>'<option value="'+escapeHtml(opt)+'" '+((record&&record.category)===opt?'selected':'')+'>'+escapeHtml(opt)+'</option>').join('');
+  const areaCheckboxes = AFFECTED_AREA_OPTIONS.map(a=>'<label style="display:flex; align-items:center; gap:6px; font-weight:400; padding:3px 0;"><input type="checkbox" class="sbdv2-area-cb" value="'+escapeHtml(a)+'" '+(selectedAreas.includes(a)?'checked':'')+'> '+escapeHtml(a)+'</label>').join('');
+  const factorsCheckboxes = STATION_CONTRIBUTING_FACTORS.map(f=>'<label style="display:flex; align-items:center; gap:6px; font-weight:400; padding:3px 0;"><input type="checkbox" class="sbdv2-factor-cb" value="'+escapeHtml(f)+'" '+(selectedFactors.includes(f)?'checked':'')+'> '+escapeHtml(f)+'</label>').join('');
+  const partsRowsHtml = parts.map((p,i)=>
+    '<tr data-part-row="'+i+'"><td><input type="text" class="sbdv2-part-item" value="'+escapeHtml(p.item||'')+'" placeholder="Item"></td>'
+    + '<td><input type="text" class="sbdv2-part-qty" value="'+escapeHtml(p.qty||'')+'" placeholder="Qty" style="width:80px;"></td>'
+    + '<td><button type="button" class="btn btn-outline btn-sm" data-remove-part-row="'+i+'">&times;</button></td></tr>'
+  ).join('');
+  const photoFieldsHtml = BREAKDOWN_PHOTO_SLOTS.map(slot=>{
+    const existing = record && record.photos && record.photos[slot.key];
+    return '<div class="field"><label>'+slot.label+' (optional &mdash; JPG, JPEG, PNG)</label>'
+      + (existing && existing.fileId ? '<div style="display:flex; align-items:center; gap:10px; margin-bottom:6px;"><img src="'+driveViewUrl(existing.fileId)+'" alt="Current" style="width:44px;height:44px;object-fit:cover;border-radius:4px;border:1px solid var(--color-border);"><label style="font-weight:400; display:flex; align-items:center; gap:6px;"><input type="checkbox" data-sbdv2-photo-remove="'+slot.key+'"> Remove current photo</label></div>' : '')
+      + '<input type="file" data-sbdv2-photo-input="'+slot.key+'" accept=".jpg,.jpeg,.png"></div>';
+  }).join('');
+  const yesNoField = (id, label, current)=>
+    '<div class="field"><label>'+label+'</label><select id="'+id+'"><option value="">'+'\u2014'+'</option><option value="Yes" '+(current==='Yes'?'selected':'')+'>Yes</option><option value="No" '+(current==='No'?'selected':'')+'>No</option></select></div>';
+
+  openModal(
+    record ? 'Edit Station Breakdown Record' : 'Add Station Breakdown Record',
+    '<div id="modal-form-error"></div>'
+    + '<div class="field"><label>Short Description (shown in the record list)</label><input type="text" id="sbf2-description" value="'+escapeHtml(record?record.description||'':'')+'" placeholder="e.g. Incomer feeder tripped"></div>'
+    + '<div class="field-row"><div class="field"><label>Shift</label><select id="sbf2-shift"><option value="">\u2014</option>'+shiftOptionsHtml+'</select></div>'
+    + '<div class="field"><label>Breakdown Severity</label><select id="sbf2-severity"><option value="">\u2014</option>'+severityOptionsHtml+'</select></div></div>'
+    + '<div class="field-row"><div class="field"><label>Date of Breakdown</label><input type="date" id="sbf2-bd-date" value="'+(record?record.breakdownDate||'':'')+'"></div>'
+    + '<div class="field"><label>Time of Breakdown</label><input type="time" id="sbf2-bd-time" value="'+(record?record.breakdownTime||'':'')+'"></div></div>'
+    + '<div class="field-row"><div class="field"><label>Date Restored (leave blank if still ongoing)</label><input type="date" id="sbf2-res-date" value="'+(record?record.restoredDate||'':'')+'"></div>'
+    + '<div class="field"><label>Time Restored</label><input type="time" id="sbf2-res-time" value="'+(record?record.restoredTime||'':'')+'"></div></div>'
+    + '<div class="field"><label>Station Event</label><select id="sbf2-event"><option value="">\u2014</option>'+eventOptionsHtml+'</select></div>'
+    + '<div class="field" id="sbf2-event-other-field" style="display:'+((record&&record.stationEvent)==='Other'?'flex':'none')+';"><label>Station Event &mdash; Other</label><input type="text" id="sbf2-event-other" value="'+escapeHtml(record?record.stationEventOther||'':'')+'"></div>'
+    + '<div class="field"><label>Affected Area</label><div style="max-height:140px; overflow-y:auto; border:1px solid var(--color-border); border-radius:6px; padding:8px 12px;">'+areaCheckboxes+'</div></div>'
+    + '<div class="field" id="sbf2-area-other-field" style="display:'+(selectedAreas.includes('Other')?'flex':'none')+';"><label>Affected Area &mdash; Other</label><input type="text" id="sbf2-area-other" value="'+escapeHtml(record?record.affectedAreaOther||'':'')+'"></div>'
+    + '<div class="field"><label>Breakdown Category</label><select id="sbf2-category"><option value="">\u2014</option>'+categoryOptionsHtml+'</select></div>'
+    + yesNoField('sbf2-repeat','Repeat Breakdown?', record?record.repeatBreakdown:'')
+    + '<div class="field"><label>Sequence of Events (detailed description)</label><textarea id="sbf2-sequence">'+escapeHtml(record?record.sequenceOfEvents||'':'')+'</textarea></div>'
+    + '<div class="field"><label>Immediate Cause</label><textarea id="sbf2-immediate-cause">'+escapeHtml(record?record.immediateCause||'':'')+'</textarea></div>'
+    + '<div class="field"><label>Root Cause</label><textarea id="sbf2-root-cause">'+escapeHtml(record?record.rootCause||'':'')+'</textarea></div>'
+    + '<div class="field"><label>Contributing Factors (if any)</label><div style="max-height:160px; overflow-y:auto; border:1px solid var(--color-border); border-radius:6px; padding:8px 12px;">'+factorsCheckboxes+'</div></div>'
+    + '<div class="field" id="sbf2-factors-other-field" style="display:'+(selectedFactors.includes('Other')?'flex':'none')+';"><label>Contributing Factors &mdash; Other</label><input type="text" id="sbf2-factors-other" value="'+escapeHtml(record?record.contributingFactorsOther||'':'')+'"></div>'
+    + '<div class="field"><label>Affected Equipment</label><div style="max-height:160px; overflow-y:auto; border:1px solid var(--color-border); border-radius:6px; padding:8px 12px;">'+equipmentCheckboxes+'</div></div>'
+    + '<div class="field"><label>Corrective Action Taken</label><textarea id="sbf2-corrective-action">'+escapeHtml(record?record.correctiveAction||'':'')+'</textarea></div>'
+    + '<div class="field"><label>Parts Replaced (optional)</label><table class="data-table"><thead><tr><th>Item</th><th>Qty</th><th></th></tr></thead><tbody id="sbdv2-parts-body">'+partsRowsHtml+'</tbody></table>'
+    + '<button type="button" class="btn btn-outline btn-sm" id="sbdv2-add-part-btn" style="margin-top:8px;">+ Add part</button></div>'
+    + '<div class="field"><label>Station Handed Over To</label><input type="text" id="sbf2-handed-over" value="'+escapeHtml(record?record.handedOverTo||'':'')+'"></div>'
+    + yesNoField('sbf2-operating-ok','Station Operating Normally?', record?record.operatingNormally:'')
+    + yesNoField('sbf2-monitoring','Monitoring Required?', record?record.monitoringRequired:'')
+    + '<div class="field" id="sbf2-monitoring-details-field" style="display:'+((record&&record.monitoringRequired)==='Yes'?'flex':'none')+';"><label>Monitoring Details</label><textarea id="sbf2-monitoring-details">'+escapeHtml(record?record.monitoringDetails||'':'')+'</textarea></div>'
+    + '<div class="field"><label>Preventive Recommendation</label><textarea id="sbf2-prevent-reco">'+escapeHtml(record?record.preventiveRecommendation||'':'')+'</textarea></div>'
+    + '<div class="field"><label>Breakdown Attended By</label><div style="max-height:140px; overflow-y:auto; border:1px solid var(--color-border); border-radius:6px; padding:8px 12px;">'+teamCheckboxes+'</div></div>'
+    + photoFieldsHtml,
+    '<button class="btn btn-outline" id="modal-cancel-btn">Cancel</button><button class="btn btn-primary" id="modal-save-btn">Save</button>'
+  );
+  document.querySelector('#modal-overlay .modal').style.maxWidth = '760px';
+
+  document.getElementById('sbf2-event').addEventListener('change', (e)=>{
+    document.getElementById('sbf2-event-other-field').style.display = e.target.value==='Other' ? 'flex' : 'none';
+  });
+  document.querySelectorAll('.sbdv2-area-cb').forEach(cb=>cb.addEventListener('change', ()=>{
+    const anyOther = Array.from(document.querySelectorAll('.sbdv2-area-cb:checked')).some(c=>c.value==='Other');
+    document.getElementById('sbf2-area-other-field').style.display = anyOther ? 'flex' : 'none';
+  }));
+  document.querySelectorAll('.sbdv2-factor-cb').forEach(cb=>cb.addEventListener('change', ()=>{
+    const anyOther = Array.from(document.querySelectorAll('.sbdv2-factor-cb:checked')).some(c=>c.value==='Other');
+    document.getElementById('sbf2-factors-other-field').style.display = anyOther ? 'flex' : 'none';
+  }));
+  document.getElementById('sbf2-monitoring').addEventListener('change', (e)=>{
+    document.getElementById('sbf2-monitoring-details-field').style.display = e.target.value==='Yes' ? 'flex' : 'none';
+  });
+
+  let partRowCount = parts.length;
+  document.getElementById('sbdv2-add-part-btn').addEventListener('click', ()=>{
+    const tbody = document.getElementById('sbdv2-parts-body');
+    const idx = partRowCount++;
+    const row = document.createElement('tr');
+    row.dataset.partRow = idx;
+    row.innerHTML = '<td><input type="text" class="sbdv2-part-item" placeholder="Item"></td><td><input type="text" class="sbdv2-part-qty" placeholder="Qty" style="width:80px;"></td><td><button type="button" class="btn btn-outline btn-sm" data-remove-part-row="'+idx+'">&times;</button></td>';
+    tbody.appendChild(row);
+    row.querySelector('[data-remove-part-row]').addEventListener('click', ()=>row.remove());
+  });
+  document.querySelectorAll('[data-remove-part-row]').forEach(btn=>btn.addEventListener('click', (e)=>{ e.target.closest('tr').remove(); }));
+
+  document.getElementById('modal-cancel-btn').addEventListener('click', closeModal);
+  document.getElementById('modal-save-btn').addEventListener('click', async ()=>{
+    const breakdownDate = document.getElementById('sbf2-bd-date').value;
+    const errBox = document.getElementById('modal-form-error');
+    if(!breakdownDate){ errBox.innerHTML = '<div class="form-error">Date of Breakdown is required.</div>'; errBox.scrollIntoView({behavior:'smooth', block:'center'}); return; }
+    const team = Array.from(document.querySelectorAll('.sbdv2-team-cb:checked')).map(cb=>cb.value);
+    const affectedArea = Array.from(document.querySelectorAll('.sbdv2-area-cb:checked')).map(cb=>cb.value);
+    const contributingFactors = Array.from(document.querySelectorAll('.sbdv2-factor-cb:checked')).map(cb=>cb.value);
+    const affectedEquipment = Array.from(document.querySelectorAll('.sbdv2-equip-cb:checked')).map(cb=>cb.value);
+    const partsReplaced = Array.from(document.querySelectorAll('#sbdv2-parts-body tr')).map(row=>({
+      item: row.querySelector('.sbdv2-part-item').value.trim(),
+      qty: row.querySelector('.sbdv2-part-qty').value.trim()
+    })).filter(p=>p.item);
+    const saveBtn = document.getElementById('modal-save-btn');
+    saveBtn.disabled = true; saveBtn.textContent = 'Saving\u2026';
+    try {
+      const photos = record ? Object.assign({}, record.photos||{}) : {};
+      for(const slot of BREAKDOWN_PHOTO_SLOTS){
+        const fileInput = document.querySelector('[data-sbdv2-photo-input="'+slot.key+'"]');
+        const removeCb = document.querySelector('[data-sbdv2-photo-remove="'+slot.key+'"]');
+        if(fileInput && fileInput.files.length){
+          const existing = photos[slot.key];
+          if(existing && existing.fileId) driveDeleteFile(existing.fileId);
+          const file = fileInput.files[0];
+          const ext = getExtension(file.name);
+          if(!['jpg','jpeg','png'].includes(ext)) throw new Error(slot.label+' must be JPG, JPEG, or PNG.');
+          const fileId = await driveUploadBinary(file, CONFIG.UPLOADS_FOLDER_ID);
+          await driveSetPublicReadable(fileId);
+          photos[slot.key] = { fileId, originalName: file.name };
+        } else if(removeCb && removeCb.checked){
+          const existing = photos[slot.key];
+          if(existing && existing.fileId) driveDeleteFile(existing.fileId);
+          photos[slot.key] = null;
+        }
+      }
+      const fields = {
+        formType: 'v2',
+        description: document.getElementById('sbf2-description').value.trim(),
+        shift: document.getElementById('sbf2-shift').value,
+        severity: document.getElementById('sbf2-severity').value,
+        breakdownDate, breakdownTime: document.getElementById('sbf2-bd-time').value,
+        restoredDate: document.getElementById('sbf2-res-date').value, restoredTime: document.getElementById('sbf2-res-time').value,
+        stationEvent: document.getElementById('sbf2-event').value,
+        stationEventOther: document.getElementById('sbf2-event-other').value.trim(),
+        affectedArea, affectedAreaOther: document.getElementById('sbf2-area-other').value.trim(),
+        category: document.getElementById('sbf2-category').value,
+        repeatBreakdown: document.getElementById('sbf2-repeat').value,
+        sequenceOfEvents: document.getElementById('sbf2-sequence').value.trim(),
+        immediateCause: document.getElementById('sbf2-immediate-cause').value.trim(),
+        rootCause: document.getElementById('sbf2-root-cause').value.trim(),
+        contributingFactors, contributingFactorsOther: document.getElementById('sbf2-factors-other').value.trim(),
+        affectedEquipment,
+        correctiveAction: document.getElementById('sbf2-corrective-action').value.trim(),
+        partsReplaced,
+        handedOverTo: document.getElementById('sbf2-handed-over').value.trim(),
+        operatingNormally: document.getElementById('sbf2-operating-ok').value,
+        monitoringRequired: document.getElementById('sbf2-monitoring').value,
+        monitoringDetails: document.getElementById('sbf2-monitoring-details').value.trim(),
+        preventiveRecommendation: document.getElementById('sbf2-prevent-reco').value.trim(),
+        team, photos
+      };
+      let newRecord = null, backup = null;
+      if(record){ backup = Object.assign({}, record); Object.assign(record, fields); }
+      else {
+        newRecord = Object.assign({ id: nextId('sbdv2'), stationId, recordedBy: currentUserEmail||'admin', createdAt: new Date().toISOString() }, fields);
+        DB.stationBreakdowns.push(newRecord);
+      }
+      try {
+        await saveDb();
+      } catch(saveErr){
+        if(newRecord){ DB.stationBreakdowns = DB.stationBreakdowns.filter(r=>r!==newRecord); }
+        else if(record && backup){ Object.assign(record, backup); }
+        throw saveErr;
+      }
+      closeModal();
+      toast('Breakdown record saved.', 'success');
+      renderStationBreakdownTab(stationId);
+    } catch(e){
+      console.error('Station breakdown save failed:', e);
+      errBox.innerHTML = '<div class="form-error">'+escapeHtml(e.message||String(e))+' (Nothing was saved -- please try again.)</div>';
+      errBox.scrollIntoView({behavior:'smooth', block:'center'});
+      saveBtn.disabled=false; saveBtn.textContent='Save';
+    }
+  });
+}
+
+async function deleteStationBreakdownV2(id, stationId){
+  if(!confirm('Delete this breakdown record? This will also delete any attached photographs.')) return;
+  const rec = DB.stationBreakdowns.find(b=>b.id===id);
+  try {
+    DB.stationBreakdowns = DB.stationBreakdowns.filter(b=>b.id!==id);
+    await saveDb();
+    if(rec && rec.photos){ BREAKDOWN_PHOTO_SLOTS.forEach(s=>{ const p=rec.photos[s.key]; if(p && p.fileId) driveDeleteFile(p.fileId); }); }
+    toast('Breakdown record deleted.', 'success');
+    renderStationBreakdownTab(stationId);
+  } catch(e){ toast(e.message, 'error'); }
+}
+
+/* ---- Station Breakdown Report (client-side PDF via jsPDF, mirrors the equipment breakdown report) ---- */
+async function buildStationBreakdownV2ReportPdf(record, stationId){
+  await ensureJsPDFLoaded();
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit:'pt', format:'a4' });
+  const pageW = doc.internal.pageSize.getWidth();
+  const pageH = doc.internal.pageSize.getHeight();
+  const margin = 40;
+  let y = margin;
+
+  const station = DB.stations.find(s=>s.id===stationId);
+  const downtime = formatDurationDHM(record.breakdownDate, record.breakdownTime, record.restoredDate, record.restoredTime);
+  const eventLabel = record.stationEvent==='Other' ? (record.stationEventOther||'Other') : (record.stationEvent||'\u2014');
+  const areas = (record.affectedArea||[]).map(a=>a==='Other'?(record.affectedAreaOther||'Other'):a);
+  const factors = (record.contributingFactors||[]).map(f=>f==='Other'?(record.contributingFactorsOther||'Other'):f);
+  const affectedEquipNames = (record.affectedEquipment||[]).map(id=>{ const e = DB.equipment.find(x=>x.id===id); return e?e.name:null; }).filter(Boolean);
+
+  const ensureSpace = (needed)=>{ if(y + needed > pageH - margin){ doc.addPage(); y = margin; } };
+  const section = (label, value)=>{
+    const maxWidth = pageW-margin*2;
+    ensureSpace(pdfFieldHeight(doc, maxWidth, value));
+    y = pdfField(doc, margin, y, maxWidth, label, value);
+  };
+
+  try { if(SAIL_LOGO_DATA_URI) doc.addImage(SAIL_LOGO_DATA_URI, 'PNG', margin, y, 60, 40); } catch(e){}
+  doc.setFont('helvetica','bold'); doc.setFontSize(16);
+  doc.text('EMD Electrical Maintenance', margin+70, y+20);
+  doc.setFont('helvetica','normal'); doc.setFontSize(11);
+  doc.text('Station Breakdown Report', margin+70, y+38);
+  y += 58;
+  doc.setDrawColor(217,142,43); doc.setLineWidth(1.5);
+  doc.line(margin, y, pageW-margin, y);
+  y += 20;
+
+  section('Station:', station?station.name:'\u2014');
+  section('Description:', record.description);
+  section('Shift:', record.shift);
+  section('Date/Time of Breakdown:', formatDateDMY(record.breakdownDate)+' '+(record.breakdownTime||''));
+  section('Date/Time Restored:', record.restoredDate ? (formatDateDMY(record.restoredDate)+' '+(record.restoredTime||'')) : 'Ongoing');
+  section('Downtime:', downtime);
+  section('Breakdown Severity:', record.severity);
+  section('Station Event:', eventLabel);
+  section('Affected Area:', areas.join(', '));
+  section('Breakdown Category:', record.category);
+  section('Repeat Breakdown?', record.repeatBreakdown);
+  section('Attended By:', (record.team||[]).join(', '));
+  y += 6;
+
+  ensureSpace(20);
+  doc.setFont('helvetica','bold'); doc.setFontSize(12);
+  doc.text('Sequence of Events', margin, y);
+  y += 16;
+  section('Detailed Description:', record.sequenceOfEvents);
+  y += 6;
+
+  ensureSpace(20);
+  doc.setFont('helvetica','bold'); doc.setFontSize(12);
+  doc.text('Root Cause Analysis', margin, y);
+  y += 16;
+  section('Immediate Cause:', record.immediateCause);
+  section('Root Cause:', record.rootCause);
+  section('Contributing Factors:', factors.join(', '));
+  section('Affected Equipment:', affectedEquipNames.join(', '));
+  y += 6;
+
+  section('Corrective Action Taken:', record.correctiveAction);
+
+  const parts = (record.partsReplaced||[]).filter(p=>p.item);
+  if(parts.length){
+    ensureSpace(20);
+    doc.setFont('helvetica','bold'); doc.setFontSize(12);
+    doc.text('Parts Replaced', margin, y);
+    y += 16;
+    doc.setFont('helvetica','normal'); doc.setFontSize(10);
+    parts.forEach(p=>{ ensureSpace(14); doc.text('\u2022 '+p.item+(p.qty?' \u2014 '+p.qty:''), margin, y); y += 14; });
+    y += 6;
+  }
+
+  ensureSpace(20);
+  doc.setFont('helvetica','bold'); doc.setFontSize(12);
+  doc.text('Restoration Details', margin, y);
+  y += 16;
+  section('Station Handed Over To:', record.handedOverTo);
+  section('Station Operating Normally?', record.operatingNormally);
+  section('Monitoring Required?', record.monitoringRequired + (record.monitoringRequired==='Yes' && record.monitoringDetails ? ' \u2014 '+record.monitoringDetails : ''));
+  y += 6;
+
+  section('Preventive Recommendation:', record.preventiveRecommendation);
+
+  const attachedPhotos = BREAKDOWN_PHOTO_SLOTS.map(slot=>({slot, photo: record.photos&&record.photos[slot.key]})).filter(p=>p.photo && p.photo.fileId);
+  if(attachedPhotos.length){
+    ensureSpace(24);
+    doc.setFont('helvetica','bold'); doc.setFontSize(12);
+    doc.text('Photographs', margin, y);
+    y += 16;
+    for(const {slot, photo} of attachedPhotos){
+      const imgData = await loadImageAsDataUrl(driveViewUrl(photo.fileId));
+      const boxW = pageW - margin*2;
+      const imgH = imgData ? Math.min(260, boxW * (imgData.h/imgData.w)) : 0;
+      ensureSpace(imgH + 24);
+      doc.setFont('helvetica','normal'); doc.setFontSize(10);
+      doc.text(slot.label, margin, y);
+      y += 8;
+      if(imgData){
+        const drawW = boxW;
+        const drawH = drawW * (imgData.h/imgData.w);
+        doc.addImage(imgData.dataUrl, 'JPEG', margin, y, drawW, Math.min(drawH, 260));
+        y += Math.min(drawH, 260) + 16;
+      } else { doc.text('(photo could not be embedded)', margin, y); y += 16; }
+    }
+  }
+
+  const totalPages = doc.internal.getNumberOfPages();
+  for(let p=1; p<=totalPages; p++){
+    doc.setPage(p);
+    doc.setFont('helvetica','normal'); doc.setFontSize(8); doc.setTextColor(140,140,140);
+    doc.text('Page '+p+' / '+totalPages, pageW-margin-60, pageH-20);
+    doc.setTextColor(0,0,0);
+  }
+  return doc;
+}
+
+async function openStationBreakdownV2ReportModal(record, stationId){
+  const station = DB.stations.find(s=>s.id===stationId);
+  const fileNameBase = 'Station_Breakdown_Report_'+(station?station.name.replace(/[^a-z0-9]+/gi,'_'):'Station')+'_'+record.breakdownDate;
+
+  openModal(
+    'Station Breakdown Report',
+    '<div id="pm-report-status" class="helper-text">Generating report\u2026</div><div id="pm-report-preview" style="margin-top:10px;"></div>',
+    '<button class="btn btn-outline" id="pm-report-close-btn">Close</button>'
+    + '<button class="btn btn-outline" id="pm-report-regenerate-btn">Regenerate</button>'
+    + '<button class="btn btn-primary" id="pm-report-download-btn" disabled>Download</button>'
+  );
+  document.querySelector('#modal-overlay .modal').style.maxWidth = '820px';
+  document.getElementById('pm-report-close-btn').addEventListener('click', closeModal);
+
+  let currentBlobUrl = null;
+  const render = async ()=>{
+    const statusEl = document.getElementById('pm-report-status');
+    const previewEl = document.getElementById('pm-report-preview');
+    const downloadBtn = document.getElementById('pm-report-download-btn');
+    if(!statusEl || !previewEl) return;
+    statusEl.textContent = 'Generating report\u2026';
+    downloadBtn.disabled = true;
+    try {
+      const doc = await buildStationBreakdownV2ReportPdf(record, stationId);
+      const blob = doc.output('blob');
+      if(currentBlobUrl) URL.revokeObjectURL(currentBlobUrl);
+      currentBlobUrl = URL.createObjectURL(blob);
+      const totalPages = doc.internal.getNumberOfPages();
+      statusEl.textContent = 'Page 1 / '+totalPages;
+      previewEl.innerHTML = '<iframe src="'+currentBlobUrl+'" style="width:100%; height:60vh; border:1px solid var(--color-border); border-radius:6px;"></iframe>';
+      downloadBtn.disabled = false;
+      downloadBtn.onclick = ()=>{
+        const a = document.createElement('a');
+        a.href = currentBlobUrl; a.download = fileNameBase+'.pdf';
+        document.body.appendChild(a); a.click(); a.remove();
+      };
+    } catch(e){ statusEl.textContent = 'Could not generate report: '+e.message; }
+  };
+  document.getElementById('pm-report-regenerate-btn').addEventListener('click', render);
+  render();
 }
 
 /* ============================================================
@@ -2949,15 +3565,23 @@ function openContractModal(id){
     const errBox = document.getElementById('modal-form-error');
     if(!contractName){ errBox.innerHTML = '<div class="form-error">Contract name is required.</div>'; return; }
     try {
-      if(contract){ contract.contractName = contractName; }
+      let newContract = null, oldName = null;
+      if(contract){ oldName = contract.contractName; contract.contractName = contractName; }
       else {
-        DB.contracts.push({ id: nextId('ctr'), contractName, poNo:'', briefDescription:'', contractor:'', startDate:'', expiryDate:'', manpower:'', createdAt: new Date().toISOString() });
+        newContract = { id: nextId('ctr'), contractName, poNo:'', briefDescription:'', contractor:'', startDate:'', expiryDate:'', manpower:'', createdAt: new Date().toISOString() };
+        DB.contracts.push(newContract);
       }
-      await saveDb();
+      try {
+        await saveDb();
+      } catch(saveErr){
+        if(newContract){ DB.contracts = DB.contracts.filter(c=>c!==newContract); }
+        else if(contract && oldName!==null){ contract.contractName = oldName; }
+        throw saveErr;
+      }
       closeModal();
       toast(contract?'Contract renamed.':'Contract added.', 'success');
       renderContractsPage();
-    } catch(e){ errBox.innerHTML = '<div class="form-error">'+escapeHtml(e.message)+'</div>'; }
+    } catch(e){ errBox.innerHTML = '<div class="form-error">'+escapeHtml(e.message)+' (Nothing was saved -- please try again.)</div>'; }
   });
 }
 
@@ -3044,12 +3668,16 @@ function renderContractDetailsTab(contractId, editMode){
       document.getElementById('ctr-save').addEventListener('click', async ()=>{
         const payload = {};
         panel.querySelectorAll('[data-field]').forEach(el=>{ payload[el.dataset.field] = el.value; });
+        const backup = Object.assign({}, contract);
         try {
           Object.assign(contract, payload);
           await saveDb();
           toast('Contract details saved.', 'success');
           renderContractDetailsTab(contractId, false);
-        } catch(e){ toast(e.message, 'error'); }
+        } catch(e){
+          Object.assign(contract, backup);
+          toast(e.message+' (Nothing was saved -- please try again.)', 'error');
+        }
       });
     } else {
       document.getElementById('ctr-edit').addEventListener('click', ()=>renderContractDetailsTab(contractId, true));
@@ -3306,13 +3934,20 @@ function openBreakdownModal(equipmentId, record){
         restoredOn: document.getElementById('bf-restored').value,
         imageFileId, imageOriginalName
       };
-      if(record){ Object.assign(record, fields); }
-      else { DB.breakdownHistory.push(Object.assign({ id: nextId('bdn'), equipmentId, recordedBy: currentUserEmail||'admin', createdAt: new Date().toISOString() }, fields)); }
-      await saveDb();
+      let newRecord = null, backup = null;
+      if(record){ backup = Object.assign({}, record); Object.assign(record, fields); }
+      else { newRecord = Object.assign({ id: nextId('bdn'), equipmentId, recordedBy: currentUserEmail||'admin', createdAt: new Date().toISOString() }, fields); DB.breakdownHistory.push(newRecord); }
+      try {
+        await saveDb();
+      } catch(saveErr){
+        if(newRecord){ DB.breakdownHistory = DB.breakdownHistory.filter(r=>r!==newRecord); }
+        else if(record && backup){ Object.assign(record, backup); }
+        throw saveErr;
+      }
       closeModal();
       toast('Breakdown record saved.', 'success');
       renderBreakdown(equipmentId);
-    } catch(e){ errBox.innerHTML = '<div class="form-error">'+escapeHtml(e.message)+'</div>'; saveBtn.disabled=false; saveBtn.textContent='Save'; }
+    } catch(e){ errBox.innerHTML = '<div class="form-error">'+escapeHtml(e.message)+' (Nothing was saved -- please try again.)</div>'; saveBtn.disabled=false; saveBtn.textContent='Save'; }
   });
 }
 
@@ -3522,11 +4157,9 @@ async function buildBreakdownV2ReportPdf(record, equipmentId){
 
   const ensureSpace = (needed)=>{ if(y + needed > pageH - margin){ doc.addPage(); y = margin; } };
   const section = (label, value)=>{
-    const lines = doc.splitTextToSize(value||'\u2014', pageW-margin*2-140);
-    ensureSpace(14*lines.length+6);
-    doc.setFont('helvetica','bold'); doc.setFontSize(10); doc.text(label, margin, y);
-    doc.setFont('helvetica','normal'); doc.text(lines, margin+140, y);
-    y += 14*lines.length + 6;
+    const maxWidth = pageW-margin*2;
+    ensureSpace(pdfFieldHeight(doc, maxWidth, value));
+    y = pdfField(doc, margin, y, maxWidth, label, value);
   };
 
   try { if(SAIL_LOGO_DATA_URI) doc.addImage(SAIL_LOGO_DATA_URI, 'PNG', margin, y, 60, 40); } catch(e){}
@@ -3912,6 +4545,24 @@ function ensureJsPDFLoaded(){
   });
 }
 
+/* Shared PDF field renderer: label on its own line, value wrapped below it.
+   Replaces the old fixed-offset side-by-side layout, which overlapped whenever
+   a label (e.g. "Further Observation Required?") was wider than the offset. */
+function pdfFieldHeight(doc, maxWidth, value){
+  doc.setFont('helvetica','normal'); doc.setFontSize(10);
+  const lines = doc.splitTextToSize(value||'\u2014', maxWidth);
+  return 13 + 12*lines.length + 8;
+}
+function pdfField(doc, x, y, maxWidth, label, value){
+  doc.setFont('helvetica','bold'); doc.setFontSize(10);
+  doc.text(label, x, y);
+  y += 13;
+  doc.setFont('helvetica','normal'); doc.setFontSize(10);
+  const lines = doc.splitTextToSize(value||'\u2014', maxWidth);
+  doc.text(lines, x, y);
+  return y + 12*lines.length + 8;
+}
+
 function loadImageAsDataUrl(url){
   return new Promise((resolve)=>{
     const img = new Image();
@@ -3965,12 +4616,9 @@ async function buildPMReportPdf(record, equipmentId){
     ['Team Assigned:', (record.team||[]).join(', ')||'\u2014']
   ];
   infoLines.forEach(([label,value])=>{
-    ensureSpace(16);
-    doc.setFont('helvetica','bold'); doc.text(label, margin, y);
-    doc.setFont('helvetica','normal');
-    const wrapped = doc.splitTextToSize(value, pageW-margin*2-110);
-    doc.text(wrapped, margin+110, y);
-    y += 14*wrapped.length + 2;
+    const maxWidth = pageW-margin*2;
+    ensureSpace(pdfFieldHeight(doc, maxWidth, value));
+    y = pdfField(doc, margin, y, maxWidth, label, value);
   });
   y += 10;
 
