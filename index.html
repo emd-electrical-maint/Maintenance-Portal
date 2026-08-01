@@ -2862,7 +2862,7 @@ async function buildStationBreakdownV2ReportPdf(record, stationId){
 
   const attachedPhotos = BREAKDOWN_PHOTO_SLOTS.map(slot=>({slot, photo: record.photos&&record.photos[slot.key]})).filter(p=>p.photo && p.photo.fileId);
   if(attachedPhotos.length){
-    y = await pdfPhotoSection(doc, margin, pageW, pageH, y, ensureSpace, 'Photographs', attachedPhotos);
+    y = await pdfPhotoSection(doc, margin, pageW, pageH, y, 'Photographs', attachedPhotos);
   }
 
   const totalPages = doc.internal.getNumberOfPages();
@@ -4270,7 +4270,7 @@ async function buildBreakdownV2ReportPdf(record, equipmentId){
 
   const attachedPhotos = BREAKDOWN_PHOTO_SLOTS.map(slot=>({slot, photo: record.photos&&record.photos[slot.key]})).filter(p=>p.photo && p.photo.fileId);
   if(attachedPhotos.length){
-    y = await pdfPhotoSection(doc, margin, pageW, pageH, y, ensureSpace, 'Photographs', attachedPhotos);
+    y = await pdfPhotoSection(doc, margin, pageW, pageH, y, 'Photographs', attachedPhotos);
   }
 
   const totalPages = doc.internal.getNumberOfPages();
@@ -4604,14 +4604,15 @@ function pdfField(doc, x, y, maxWidth, label, value){
    never stretched or cropped), a light border, stacked one below the other.
    Returns the new y position. Skips the whole section if attachedPhotos is empty
    (callers should already only invoke this when there's at least one photo). */
-async function pdfPhotoSection(doc, margin, pageW, pageH, y, ensureSpaceFn, title, attachedPhotos){
+async function pdfPhotoSection(doc, margin, pageW, pageH, y, title, attachedPhotos){
   const boxW = 220, boxH = 160;
-  ensureSpaceFn(24);
+  const ensureSpace = (needed)=>{ if(y + needed > pageH - margin){ doc.addPage(); y = margin; } };
+  ensureSpace(24);
   doc.setFont('helvetica','bold'); doc.setFontSize(12);
   doc.text(title, margin, y);
   y += 16;
   for(const {slot, photo} of attachedPhotos){
-    ensureSpaceFn(boxH + 30);
+    ensureSpace(boxH + 30);
     doc.setFont('helvetica','normal'); doc.setFontSize(10);
     doc.text(slot.label, margin, y);
     y += 8;
@@ -4800,7 +4801,7 @@ async function buildPMReportPdf(record, equipmentId){
   // Photos - only if at least one was attached
   const attachedPhotos = PM_PHOTO_SLOTS.map(slot=>({slot, photo: record.photos&&record.photos[slot.key]})).filter(p=>p.photo && p.photo.fileId);
   if(attachedPhotos.length){
-    y = await pdfPhotoSection(doc, margin, pageW, pageH, y, ensureSpace, 'Photos', attachedPhotos);
+    y = await pdfPhotoSection(doc, margin, pageW, pageH, y, 'Photos', attachedPhotos);
   }
 
   // Footer page numbers
