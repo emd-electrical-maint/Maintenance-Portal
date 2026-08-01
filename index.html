@@ -84,6 +84,12 @@ button { font-family:inherit; cursor:pointer; }
 .homepage-banner img { display:block; width:100%; max-height:260px; object-fit:cover; }
 .homepage-banner-actions { position:absolute; top:10px; right:10px; display:flex; gap:6px; }
 .homepage-banner-placeholder { margin-bottom:28px; min-height:140px; }
+.gate-wrap { display:flex; flex-direction:column; align-items:center; }
+.gate-card { background:var(--color-surface); border:1px solid var(--color-border); border-radius:var(--radius-card); box-shadow:var(--shadow-card); padding:40px 32px; text-align:center; max-width:520px; width:100%; margin:8px auto 28px; }
+.gate-title { font-family:var(--font-display); font-size:26px; margin:0 0 8px; }
+.gate-subtitle { color:var(--color-text-muted); font-size:14.5px; margin-bottom:24px; }
+.gate-actions { display:flex; justify-content:center; gap:12px; flex-wrap:wrap; }
+.gate-actions .btn { padding:11px 22px; font-size:14.5px; }
 
 .safety-banner { display:flex; align-items:center; justify-content:center; text-align:center; gap:14px; background:#fdf6ea; border:1px solid var(--color-border); border-left:5px solid var(--color-accent); border-radius:var(--radius-card); padding:20px 28px; margin-bottom:26px; color:var(--color-text-muted); font-size:14.5px; box-shadow:var(--shadow-card); }
 .safety-banner svg { flex-shrink:0; color:var(--color-accent-dark); }
@@ -328,6 +334,14 @@ function loadAuthFromStorage(){
 function clearAuthStorage(){
   try { sessionStorage.removeItem(AUTH_STORAGE_KEY); } catch(e){}
 }
+
+let guestModeChosen = false;
+const GUEST_STORAGE_KEY = 'emdPortalGuestMode';
+function saveGuestModeToStorage(){ try { sessionStorage.setItem(GUEST_STORAGE_KEY, '1'); } catch(e){} }
+function loadGuestModeFromStorage(){ try { guestModeChosen = sessionStorage.getItem(GUEST_STORAGE_KEY)==='1'; } catch(e){} }
+function clearGuestModeStorage(){ try { sessionStorage.removeItem(GUEST_STORAGE_KEY); } catch(e){} }
+function hasPassedGate(){ return Boolean(accessToken) || guestModeChosen; }
+
 let currentEquipmentCache = null; // convenience cache for the currently open equipment page
 
 function emptyDb() {
@@ -672,7 +686,7 @@ function initAuth(){
 
 function isAdmin(){
   if(!accessToken) return false;
-  if(CONFIG.ADMIN_EMAILS.includes(currentUserEmail)) return true; // permanent, hardcoded bootstrap admins -- never affected by Manage Access
+  if(CONFIG.ADMIN_EMAILS.includes(currentUserEmail)) return true; // permanent, hardcoded bootstrap admins -- never affected by Admin Settings
   const hasAnyConfig = CONFIG.ADMIN_EMAILS.length || CONFIG.OPERATOR_EMAILS.length || (DB.accessList && DB.accessList.length);
   if(!hasAnyConfig) return true; // nothing configured anywhere -> fully open, matches original default behaviour
   const entry = DB.accessList && DB.accessList.find(a=>a.email===currentUserEmail);
@@ -697,6 +711,8 @@ async function logout(){
   if(accessToken){ google.accounts.oauth2.revoke(accessToken, ()=>{}); }
   accessToken = null; currentUserEmail = null; tokenExpiresAt = 0;
   clearAuthStorage();
+  guestModeChosen = false;
+  clearGuestModeStorage();
   toast('Logged out.', 'success');
   try { await loadDb(); } catch(e){ toast('Could not refresh portal data: '+e.message, 'error'); }
   renderTopbar();
@@ -722,8 +738,9 @@ function renderTopbar(){
     + '<div class="topbar-title"><span class="line1">Bhilai Steel Plant &middot; Energy Management Dept.</span><span class="line2">Electrical Maintenance Portal</span></div>'
     + '</a>'
     + '<div class="topbar-actions">'
-    + (isAdmin()
-        ? '<a href="#/access" class="btn btn-topbar" style="text-decoration:none;">Manage Access</a><div class="admin-pill"><span class="status-dot"></span><span>Admin: '+escapeHtml(currentUserEmail||'')+'</span></div><button class="btn btn-topbar" id="logout-btn">Log out</button>'
+    + (!hasPassedGate() ? ''
+      : isAdmin()
+        ? '<a href="#/admin-settings" class="btn btn-topbar" style="text-decoration:none;">Admin Settings</a><div class="admin-pill"><span class="status-dot"></span><span>Admin: '+escapeHtml(currentUserEmail||'')+'</span></div><button class="btn btn-topbar" id="logout-btn">Log out</button>'
         : isOperator()
           ? '<div class="admin-pill"><span class="status-dot"></span><span>Operator: '+escapeHtml(currentUserEmail||'')+'</span></div><button class="btn btn-topbar" id="logout-btn">Log out</button>'
           : '<button class="btn btn-topbar" id="login-btn">Sign in</button>')
@@ -794,6 +811,7 @@ window.addEventListener('hashchange', renderRoute);
 
 function renderRoute(){
   if(!CONFIG.DB_FILE_ID){ renderSetupScreen(); return; }
+  if(!hasPassedGate()){ renderGateScreen(); return; } // hash is left untouched -- once past the gate, renderRoute() re-runs and honors it
   const hash = location.hash || '#/';
   const stationMatch = hash.match(/^#\/station\/(.+)$/);
   const equipmentMatch = hash.match(/^#\/equipment\/([^/]+)(?:\/tab\/([a-z]+))?$/);
@@ -811,7 +829,7 @@ function renderRoute(){
   else if(hash === '#/stations') renderAllStationsPage();
   else if(hash === '#/pm-search') renderPMSearchPage();
   else if(hash === '#/breakdown-search') renderBreakdownSearchPage();
-  else if(hash === '#/access') renderAccessPage();
+  else if(hash === '#/admin-settings') renderAdminSettingsPage();
   else renderHomePage();
   const app = document.getElementById('app');
   app.classList.remove('page-enter');
@@ -965,19 +983,9 @@ function renderHomePage(){
   const contractCount = DB.contracts.length;
   const pmCount = DB.pmRecords.length;
   const equipmentBreakdownCount = DB.breakdownHistory.length;
-  const banner = DB.homepageBanner;
-  const bannerHtml = banner
-    ? '<div class="homepage-banner">'
-      + '<img src="'+driveViewUrl(banner.fileId)+'" alt="">'
-      + (admin ? '<div class="homepage-banner-actions"><button class="btn btn-outline btn-sm" id="replace-banner-btn">Replace</button><button class="btn btn-danger btn-sm" id="remove-banner-btn">Remove</button></div>' : '')
-      + '</div>'
-    : (admin ? '<div class="add-inline-card homepage-banner-placeholder" id="add-banner-btn">+ Add homepage banner image</div>' : '');
 
   app.innerHTML =
-    bannerHtml
-    + '<div class="safety-banner"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 2L2 7v6c0 5 4.2 8.7 10 9 5.8-.3 10-4 10-9V7l-10-5z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M12 8v5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="12" cy="16" r="1" fill="currentColor"/></svg>'
-    + '<span><strong>Safety first:</strong> PPE is your last line of defense&mdash;never skip it.</span></div>'
-    + renderAlertsHtml()
+    renderAlertsHtml()
     + '<div class="page-eyebrow">Energy Management Department</div>'
     + '<div class="page-header"><div><h1>Electrical Installations by Station</h1>'
     + '<div class="page-subtitle">Select a station to view its gas booster / holder equipment, nameplate records, and maintenance history.</div></div></div>'
@@ -1024,13 +1032,33 @@ function renderHomePage(){
 
   wireStationCardActions();
   wireAlertDismissButtons();
+}
 
-  const addBannerBtn = document.getElementById('add-banner-btn');
-  if(addBannerBtn) addBannerBtn.addEventListener('click', ()=>openBannerUploadModal());
-  const replaceBannerBtn = document.getElementById('replace-banner-btn');
-  if(replaceBannerBtn) replaceBannerBtn.addEventListener('click', ()=>openBannerUploadModal());
-  const removeBannerBtn = document.getElementById('remove-banner-btn');
-  if(removeBannerBtn) removeBannerBtn.addEventListener('click', deleteBanner);
+function renderGateScreen(){
+  const app = document.getElementById('app');
+  const banner = DB.homepageBanner;
+  const bannerHtml = banner ? '<div class="homepage-banner"><img src="'+driveViewUrl(banner.fileId)+'" alt=""></div>' : '';
+
+  app.innerHTML =
+    bannerHtml
+    + '<div class="gate-wrap"><div class="gate-card">'
+    + '<h1 class="gate-title">EMD Electrical Maintenance</h1>'
+    + '<div class="gate-subtitle">Maintenance Team Portal &middot; sign in to continue.</div>'
+    + '<div class="gate-actions">'
+    + '<button class="btn btn-primary" id="gate-signin-btn">Sign in with Google</button>'
+    + '<button class="btn btn-outline" id="gate-guest-btn">Continue as Guest</button>'
+    + '</div>'
+    + '</div></div>'
+    + '<div class="safety-banner"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 2L2 7v6c0 5 4.2 8.7 10 9 5.8-.3 10-4 10-9V7l-10-5z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M12 8v5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="12" cy="16" r="1" fill="currentColor"/></svg>'
+    + '<span><strong>Safety first:</strong> PPE is your last line of defense&mdash;never skip it.</span></div>';
+
+  document.getElementById('gate-signin-btn').addEventListener('click', login);
+  document.getElementById('gate-guest-btn').addEventListener('click', ()=>{
+    guestModeChosen = true;
+    saveGuestModeToStorage();
+    renderTopbar();
+    renderRoute();
+  });
 }
 
 function renderAllStationsPage(){
@@ -1101,7 +1129,7 @@ function openBannerUploadModal(){
     existing ? 'Replace Homepage Banner' : 'Add Homepage Banner',
     '<div id="modal-form-error"></div>'
     + '<div class="field"><label>Image (JPG, JPEG, PNG)</label><input type="file" id="banner-file-input" accept=".jpg,.jpeg,.png"></div>'
-    + '<div class="helper-text">Shown at the very top of the homepage, above the safety banner. If no image is set, this space stays hidden entirely.</div>',
+    + '<div class="helper-text">Shown at the top of the sign-in/guest gate screen, before anyone enters the portal. If no image is set, this space stays hidden entirely.</div>',
     '<button class="btn btn-outline" id="modal-cancel-btn">Cancel</button><button class="btn btn-primary" id="modal-save-btn">'+(existing?'Replace':'Upload')+'</button>'
   );
   document.getElementById('modal-cancel-btn').addEventListener('click', closeModal);
@@ -1123,7 +1151,7 @@ function openBannerUploadModal(){
       if(oldFileId) driveDeleteFile(oldFileId);
       closeModal();
       toast(existing ? 'Banner replaced.' : 'Banner added.', 'success');
-      renderHomePage();
+      renderAdminSettingsPage();
     } catch(e){ errBox.innerHTML = '<div class="form-error">'+escapeHtml(e.message)+'</div>'; saveBtn.disabled=false; saveBtn.textContent=existing?'Replace':'Upload'; }
   });
 }
@@ -1136,7 +1164,7 @@ async function deleteBanner(){
     await saveDb();
     if(existing && existing.fileId) driveDeleteFile(existing.fileId);
     toast('Banner removed.', 'success');
-    renderHomePage();
+    renderAdminSettingsPage();
   } catch(e){ toast(e.message, 'error'); }
 }
 
@@ -4839,10 +4867,10 @@ async function openPMReportModal(record, equipmentId){
    permanently hardcoded in CONFIG.ADMIN_EMAILS and are NOT shown
    here as removable -- they are the permanent recovery admins.
    ============================================================ */
-function renderAccessPage(){
+function renderAdminSettingsPage(){
   const app = document.getElementById('app');
   if(!isAdmin()){
-    app.innerHTML = '<div class="empty-state"><h3>Admins only</h3><p>You need Admin access to manage who can sign in to this portal.</p></div>';
+    app.innerHTML = '<div class="empty-state"><h3>Admins only</h3><p>You need Admin access to view this page.</p></div>';
     return;
   }
   const accessList = [...(DB.accessList||[])].sort((a,b)=>a.email.localeCompare(b.email));
@@ -4858,12 +4886,21 @@ function renderAccessPage(){
     + '<td class="row-actions"><button class="btn btn-danger btn-sm" data-remove-access="'+escapeHtml(a.email)+'">Remove</button></td></tr>'
   ).join('');
 
+  const banner = DB.homepageBanner;
+  const bannerSectionHtml = banner
+    ? '<div style="display:flex; align-items:center; gap:16px; flex-wrap:wrap;">'
+      + '<img src="'+driveViewUrl(banner.fileId)+'" alt="" style="width:220px; height:80px; object-fit:cover; border-radius:6px; border:1px solid var(--color-border);">'
+      + '<div style="display:flex; gap:8px;"><button class="btn btn-outline btn-sm" id="replace-banner-btn">Replace</button><button class="btn btn-danger btn-sm" id="remove-banner-btn">Remove</button></div>'
+      + '</div>'
+    : '<button class="add-inline-card" id="add-banner-btn" style="width:100%;">+ Add gate screen banner image</button>';
+
   app.innerHTML =
-    '<div class="breadcrumb"><a href="#/">Home</a><span class="sep">/</span><span class="current">Manage Access</span></div>'
-    + '<div class="page-header"><div><div class="page-eyebrow">Admin</div><h1>Manage Access</h1>'
-    + '<div class="page-subtitle">Add or remove who can sign in to this portal as an Admin or Operator.</div></div></div>'
+    '<div class="breadcrumb"><a href="#/">Home</a><span class="sep">/</span><span class="current">Admin Settings</span></div>'
+    + '<div class="page-header"><div><div class="page-eyebrow">Admin</div><h1>Admin Settings</h1>'
+    + '<div class="page-subtitle">Manage who can sign in, and the sign-in/guest gate screen banner.</div></div></div>'
     + '<div class="safety-banner" style="border-left-color:#3d6fa8;"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.8"/><path d="M12 8v5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="12" cy="16" r="1" fill="currentColor"/></svg>'
     + '<span>Adding someone here only grants them access <strong>inside this app</strong>. They also need to be added as a <strong>Test user</strong> in Google Cloud Console (OAuth consent screen) before they can sign in at all &mdash; that step is separate and still has to be done manually.</span></div>'
+    + '<div class="page-header" style="margin-bottom:14px;"><div><h1 style="font-size:19px;">Access Management</h1></div></div>'
     + '<div class="spec-sheet" style="margin-bottom:24px;"><div class="spec-sheet-header"><span>Permanent Admins</span></div>'
     + '<table class="data-table" style="border:none; border-radius:0; box-shadow:none;"><thead><tr><th>Email</th><th>Role</th><th></th></tr></thead><tbody>'+permanentRows+'</tbody></table></div>'
     + '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">'
@@ -4872,7 +4909,9 @@ function renderAccessPage(){
     + '</div>'
     + (accessList.length===0
       ? '<div class="empty-state"><h3>No additional people yet</h3><p>Add your first Admin or Operator above.</p></div>'
-      : '<table class="data-table"><thead><tr><th>Email</th><th>Role</th><th></th></tr></thead><tbody>'+managedRows+'</tbody></table>');
+      : '<table class="data-table" style="margin-bottom:32px;"><thead><tr><th>Email</th><th>Role</th><th></th></tr></thead><tbody>'+managedRows+'</tbody></table>')
+    + '<div class="page-header" style="margin-top:28px; margin-bottom:14px;"><div><h1 style="font-size:19px;">Homepage (Gate Screen) Banner</h1></div></div>'
+    + '<div class="spec-sheet"><div class="spec-sheet-header"><span>Gate Screen Banner</span></div><div style="padding:18px;">'+bannerSectionHtml+'</div></div>';
 
   document.getElementById('add-access-btn').addEventListener('click', ()=>openAddAccessModal());
   document.querySelectorAll('[data-remove-access]').forEach(btn=>btn.addEventListener('click', ()=>{
@@ -4885,6 +4924,13 @@ function renderAccessPage(){
     if(!confirm(msg)) return;
     removeAccessEntry(email);
   }));
+
+  const addBannerBtn = document.getElementById('add-banner-btn');
+  if(addBannerBtn) addBannerBtn.addEventListener('click', ()=>openBannerUploadModal());
+  const replaceBannerBtn = document.getElementById('replace-banner-btn');
+  if(replaceBannerBtn) replaceBannerBtn.addEventListener('click', ()=>openBannerUploadModal());
+  const removeBannerBtn = document.getElementById('remove-banner-btn');
+  if(removeBannerBtn) removeBannerBtn.addEventListener('click', deleteBanner);
 }
 
 function openAddAccessModal(){
@@ -4913,7 +4959,7 @@ function openAddAccessModal(){
       await saveDb();
       closeModal();
       toast('Access granted to '+email+'.', 'success');
-      renderAccessPage();
+      renderAdminSettingsPage();
     } catch(e){
       DB.accessList = DB.accessList.filter(a=>a!==newEntry);
       errBox.innerHTML = '<div class="form-error">'+escapeHtml(e.message)+' (Nothing was saved -- please try again.)</div>';
@@ -4928,7 +4974,7 @@ async function removeAccessEntry(email){
   try {
     await saveDb();
     toast('Access removed for '+email+'.', 'success');
-    renderAccessPage();
+    renderAdminSettingsPage();
   } catch(e){
     DB.accessList = backup;
     toast(e.message+' (Nothing was saved -- please try again.)', 'error');
@@ -5019,6 +5065,7 @@ function startAutoRefresh(){
 
 async function boot(){
   loadAuthFromStorage();
+  loadGuestModeFromStorage();
   renderTopbar();
   renderFooter();
   initAuth();
