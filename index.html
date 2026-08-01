@@ -829,6 +829,7 @@ function renderRoute(){
   else if(hash === '#/pm-search') renderPMSearchPage();
   else if(hash === '#/breakdown-search') renderBreakdownSearchPage();
   else if(hash === '#/admin-settings') renderAdminSettingsPage();
+  else if(hash === '#/earthpit-directory') renderEarthPitDirectoryPage();
   else renderHomePage();
   const app = document.getElementById('app');
   app.classList.remove('page-enter');
@@ -982,6 +983,7 @@ function renderHomePage(){
   const contractCount = DB.contracts.length;
   const pmCount = DB.pmRecords.length;
   const equipmentBreakdownCount = DB.breakdownHistory.length;
+  const earthPitRecordCount = DB.earthPitRecords.length;
 
   app.innerHTML =
     renderAlertsHtml()
@@ -992,7 +994,7 @@ function renderHomePage(){
     + (stations.length===0 ? '<div class="empty-state" style="grid-column:1/-1;"><h3>No stations yet</h3><p>'+(admin?'Add your first station below.':'Check back once an administrator has added stations.')+'</p></div>' : cards+viewMoreTile)
     + (admin && !hasMoreStations ? '<button class="add-inline-card" id="add-station-btn">+ Add station</button>' : '')
     + '</div>'
-    + '<div class="module-row module-row-2">'
+    + '<div class="module-row">'
     + '<div class="module-col"><div class="page-header"><div><h1>Preventive Maintenance</h1>'
     + '<div class="page-subtitle">Search equipment PM history</div></div></div>'
     + '<div class="station-grid"><div class="station-card" data-module-link="#/pm-search"><div class="station-tag">PREVENTIVE MAINTENANCE</div><h3>Preventive Maintenance</h3>'
@@ -1003,6 +1005,11 @@ function renderHomePage(){
     + '<div class="station-grid"><div class="station-card" data-module-link="#/breakdown-search"><div class="station-tag">BREAKDOWN HISTORY</div><h3>Breakdowns</h3>'
     + '<div class="station-meta"><span>'+equipmentBreakdownCount+' recorded breakdown'+(equipmentBreakdownCount===1?'':'s')+'</span></div>'
     + '<div class="station-card-footer"><a href="#/breakdown-search" class="btn btn-station-open btn-sm">Search Equipment &rarr;</a></div></div></div></div>'
+    + '<div class="module-col"><div class="page-header"><div><h1>Earth Pit Directory</h1>'
+    + '<div class="page-subtitle">All stations, by calendar year</div></div></div>'
+    + '<div class="station-grid"><div class="station-card" data-module-link="#/earthpit-directory"><div class="station-tag">EARTH PIT DIRECTORY</div><h3>Earth Pit Directory</h3>'
+    + '<div class="station-meta"><span>'+earthPitRecordCount+' record'+(earthPitRecordCount===1?'':'s')+' on file</span></div>'
+    + '<div class="station-card-footer"><a href="#/earthpit-directory" class="btn btn-station-open btn-sm">Open Directory &rarr;</a></div></div></div></div>'
     + '</div>'
     + '<div class="module-row">'
     + '<div class="module-col"><div class="page-header"><div><h1>Electrical Safety</h1>'
@@ -1120,6 +1127,182 @@ function renderEquipmentSearchPage(kind){
 }
 function renderPMSearchPage(){ renderEquipmentSearchPage('pm'); }
 function renderBreakdownSearchPage(){ renderEquipmentSearchPage('breakdown'); }
+
+/* ============================================================
+   EARTH PIT DIRECTORY (homepage module)
+   A consolidated, read-only view across every station's existing
+   Earth Pit records -- matched purely by each record's own Testing
+   Date (not by the free-text year-container labels, which aren't
+   guaranteed consistent station to station). No new data, no
+   changes to the existing per-station Earth Pit tab or "+Add Year".
+   ============================================================ */
+function renderEarthPitDirectoryPage(){
+  const app = document.getElementById('app');
+  const allDated = DB.earthPitRecords.filter(r=>r.testingDate);
+  const years = [...new Set(allDated.map(r=>r.testingDate.slice(0,4)))].sort((a,b)=>b.localeCompare(a));
+  const currentYear = String(new Date().getFullYear());
+  const defaultYear = years.includes(currentYear) ? currentYear : (years[0] || currentYear);
+
+  app.innerHTML =
+    '<div class="breadcrumb"><a href="#/">Home</a><span class="sep">/</span><span class="current">Earth Pit Directory</span></div>'
+    + '<div class="page-header"><div><div class="page-eyebrow">Earth Pits</div><h1>Earth Pit Directory</h1>'
+    + '<div class="page-subtitle">Earth pit testing records across every station, consolidated by calendar year based on each record\u2019s testing date.</div></div></div>'
+    + '<div style="display:flex; justify-content:space-between; align-items:flex-end; gap:12px; margin-bottom:16px; flex-wrap:wrap;">'
+    + '<div class="field" style="max-width:180px;"><label>Year</label><select id="epd-year-select">'
+    + (years.length ? years.map(y=>'<option value="'+y+'" '+(y===defaultYear?'selected':'')+'>'+y+'</option>').join('') : '<option value="'+currentYear+'">'+currentYear+'</option>')
+    + '</select></div>'
+    + '<button class="btn btn-outline btn-sm" id="epd-report-btn">Generate Report</button>'
+    + '</div>'
+    + '<div id="epd-table-container"></div>';
+
+  const renderTable = (year)=>{
+    const container = document.getElementById('epd-table-container');
+    const records = DB.earthPitRecords.filter(r=>r.testingDate && r.testingDate.slice(0,4)===year);
+    if(records.length===0){
+      container.innerHTML = '<div class="empty-state"><h3>No earth pit records for '+escapeHtml(year)+'</h3><p>Try a different year.</p></div>';
+      return;
+    }
+    const byStation = {};
+    records.forEach(r=>{ (byStation[r.stationId] = byStation[r.stationId]||[]).push(r); });
+    const stationIds = Object.keys(byStation).sort((a,b)=>{
+      const sa = DB.stations.find(s=>s.id===a), sb = DB.stations.find(s=>s.id===b);
+      return (sa?sa.name:'').localeCompare(sb?sb.name:'');
+    });
+    const statusHeaderCells = EARTHPIT_STATUS_FIELDS.map(f=>'<th>'+f.label+'</th>').join('');
+    container.innerHTML = stationIds.map(sid=>{
+      const station = DB.stations.find(s=>s.id===sid);
+      const rows = byStation[sid].sort((a,b)=>(a.testingDate||'').localeCompare(b.testingDate||'')).map(r=>{
+        const statusCells = EARTHPIT_STATUS_FIELDS.map(f=>'<td>'+escapeHtml(r[f.key]||'OK')+'</td>').join('');
+        return '<tr><td class="mono">'+escapeHtml(r.sNo||'\u2014')+'</td><td>'+escapeHtml(r.pitNo||'\u2014')+'</td>'
+          + '<td class="mono">'+escapeHtml(r.resistanceValue||'\u2014')+'</td>'
+          + '<td class="mono">'+formatDate(r.testingDate)+'</td><td class="mono">'+formatDate(r.dueDate)+'</td>'
+          + statusCells + '</tr>';
+      }).join('');
+      return '<div class="spec-sheet" style="margin-bottom:20px;"><div class="spec-sheet-header"><span>'+escapeHtml(station?station.name:'Unknown Station')+'</span>'
+        + '<span class="mono" style="font-weight:400;">'+byStation[sid].length+' record'+(byStation[sid].length===1?'':'s')+'</span></div>'
+        + '<div style="overflow-x:auto;"><table class="data-table" style="border:none; border-radius:0; box-shadow:none;">'
+        + '<thead><tr><th>S.No</th><th>Earth Pit No.</th><th>Resistance (&Omega;)</th><th>Testing Date</th><th>Due Date</th>'+statusHeaderCells+'</tr></thead>'
+        + '<tbody>'+rows+'</tbody></table></div></div>';
+    }).join('');
+  };
+
+  document.getElementById('epd-year-select').addEventListener('change', (e)=>renderTable(e.target.value));
+  document.getElementById('epd-report-btn').addEventListener('click', ()=>openEarthPitDirectoryReportModal(document.getElementById('epd-year-select').value));
+  renderTable(defaultYear);
+}
+
+async function buildEarthPitDirectoryReportPdf(year){
+  await ensureJsPDFLoaded();
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit:'pt', format:'a4' });
+  const pageW = doc.internal.pageSize.getWidth();
+  const pageH = doc.internal.pageSize.getHeight();
+  const margin = 40;
+  let y = margin;
+  const ensureSpace = (needed)=>{ if(y + needed > pageH - margin){ doc.addPage(); y = margin; } };
+
+  try { if(SAIL_LOGO_DATA_URI) doc.addImage(SAIL_LOGO_DATA_URI, 'PNG', margin, y, 60, 40); } catch(e){}
+  doc.setFont('helvetica','bold'); doc.setFontSize(16);
+  doc.text('EMD Electrical Maintenance', margin+70, y+20);
+  doc.setFont('helvetica','normal'); doc.setFontSize(11);
+  doc.text('Earth Pit Directory Report', margin+70, y+38);
+  y += 58;
+  doc.setDrawColor(217,142,43); doc.setLineWidth(1.5);
+  doc.line(margin, y, pageW-margin, y);
+  y += 20;
+
+  const records = DB.earthPitRecords.filter(r=>r.testingDate && r.testingDate.slice(0,4)===year);
+  y = pdfField(doc, margin, y, pageW-margin*2, 'Year:', year);
+  y = pdfField(doc, margin, y, pageW-margin*2, 'Total Records:', String(records.length));
+  y += 8;
+
+  const byStation = {};
+  records.forEach(r=>{ (byStation[r.stationId] = byStation[r.stationId]||[]).push(r); });
+  const stationIds = Object.keys(byStation).sort((a,b)=>{
+    const sa = DB.stations.find(s=>s.id===a), sb = DB.stations.find(s=>s.id===b);
+    return (sa?sa.name:'').localeCompare(sb?sb.name:'');
+  });
+
+  const colX = { sno:margin, pit:margin+45, res:margin+140, test:margin+220, due:margin+300, status:margin+380 };
+  stationIds.forEach(sid=>{
+    const station = DB.stations.find(s=>s.id===sid);
+    ensureSpace(30);
+    doc.setFont('helvetica','bold'); doc.setFontSize(12);
+    doc.text(station?station.name:'Unknown Station', margin, y);
+    y += 16;
+    doc.setFont('helvetica','bold'); doc.setFontSize(8);
+    doc.text('S.No', colX.sno, y); doc.text('Pit No.', colX.pit, y); doc.text('Resistance', colX.res, y);
+    doc.text('Tested', colX.test, y); doc.text('Due', colX.due, y); doc.text('Status', colX.status, y);
+    y += 4;
+    doc.setDrawColor(180,180,180); doc.setLineWidth(0.5);
+    doc.line(margin, y, pageW-margin, y);
+    y += 10;
+    doc.setFont('helvetica','normal'); doc.setFontSize(8);
+    byStation[sid].sort((a,b)=>(a.testingDate||'').localeCompare(b.testingDate||'')).forEach(r=>{
+      ensureSpace(14);
+      const notOk = EARTHPIT_STATUS_FIELDS.filter(f=>(r[f.key]||'OK')==='Not OK').map(f=>f.label);
+      const statusText = notOk.length ? notOk.join(', ')+' - Not OK' : 'All OK';
+      doc.text(String(r.sNo||'\u2014'), colX.sno, y);
+      doc.text(String(r.pitNo||'\u2014'), colX.pit, y);
+      doc.text(String(r.resistanceValue||'\u2014'), colX.res, y);
+      doc.text(formatDateDMY(r.testingDate), colX.test, y);
+      doc.text(formatDateDMY(r.dueDate), colX.due, y);
+      doc.text(statusText, colX.status, y);
+      y += 14;
+    });
+    y += 16;
+  });
+
+  const totalPages = doc.internal.getNumberOfPages();
+  for(let p=1; p<=totalPages; p++){
+    doc.setPage(p);
+    doc.setFont('helvetica','normal'); doc.setFontSize(8); doc.setTextColor(140,140,140);
+    doc.text('Page '+p+' / '+totalPages, pageW-margin-60, pageH-20);
+    doc.setTextColor(0,0,0);
+  }
+  return doc;
+}
+
+async function openEarthPitDirectoryReportModal(year){
+  const fileNameBase = 'Earth_Pit_Directory_Report_'+year;
+
+  openModal(
+    'Earth Pit Directory Report',
+    '<div id="pm-report-status" class="helper-text">Generating report\u2026</div><div id="pm-report-preview" style="margin-top:10px;"></div>',
+    '<button class="btn btn-outline" id="pm-report-close-btn">Close</button>'
+    + '<button class="btn btn-outline" id="pm-report-regenerate-btn">Regenerate</button>'
+    + '<button class="btn btn-primary" id="pm-report-download-btn" disabled>Download</button>'
+  );
+  document.querySelector('#modal-overlay .modal').style.maxWidth = '820px';
+  document.getElementById('pm-report-close-btn').addEventListener('click', closeModal);
+
+  let currentBlobUrl = null;
+  const render = async ()=>{
+    const statusEl = document.getElementById('pm-report-status');
+    const previewEl = document.getElementById('pm-report-preview');
+    const downloadBtn = document.getElementById('pm-report-download-btn');
+    if(!statusEl || !previewEl) return;
+    statusEl.textContent = 'Generating report\u2026';
+    downloadBtn.disabled = true;
+    try {
+      const doc = await buildEarthPitDirectoryReportPdf(year);
+      const blob = doc.output('blob');
+      if(currentBlobUrl) URL.revokeObjectURL(currentBlobUrl);
+      currentBlobUrl = URL.createObjectURL(blob);
+      const totalPages = doc.internal.getNumberOfPages();
+      statusEl.textContent = 'Page 1 / '+totalPages;
+      previewEl.innerHTML = '<iframe src="'+currentBlobUrl+'" style="width:100%; height:60vh; border:1px solid var(--color-border); border-radius:6px;"></iframe>';
+      downloadBtn.disabled = false;
+      downloadBtn.onclick = ()=>{
+        const a = document.createElement('a');
+        a.href = currentBlobUrl; a.download = fileNameBase+'.pdf';
+        document.body.appendChild(a); a.click(); a.remove();
+      };
+    } catch(e){ statusEl.textContent = 'Could not generate report: '+e.message; }
+  };
+  document.getElementById('pm-report-regenerate-btn').addEventListener('click', render);
+  render();
+}
 
 function openBannerUploadModal(){
   const existing = DB.homepageBanner;
