@@ -480,7 +480,23 @@ async function driveFetchPublic(path, params){
 async function driveFetchAuthed(url, options){
   options = options || {};
   options.headers = Object.assign({}, options.headers, { Authorization: 'Bearer '+accessToken });
-  const res = await fetch(url, options);
+  let res;
+  const maxAttempts = 3;
+  for(let attempt=1; attempt<=maxAttempts; attempt++){
+    try {
+      res = await fetch(url, options);
+      break; // got a real response from Google (even an error status) -- stop retrying, handle it below
+    } catch(networkErr){
+      // fetch() itself rejected -- the request never got a response at all (dropped connection, DNS hiccup,
+      // timeout). This is exactly the "looked like it failed but actually went through" scenario: Google may
+      // well have received and processed the request even though we never saw the reply. Retry a few times
+      // before giving up, since our writes always resend the identical full payload -- safe to retry.
+      if(attempt===maxAttempts){
+        throw new Error('Could not reach Google Drive after several attempts. Your connection may be unstable -- please check it, then refresh this page before retrying to avoid creating a duplicate.');
+      }
+      await new Promise(r=>setTimeout(r, 700*attempt));
+    }
+  }
   if(res.status === 401){
     accessToken = null; currentUserEmail = null; tokenExpiresAt = 0;
     clearAuthStorage();
