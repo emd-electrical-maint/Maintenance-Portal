@@ -142,6 +142,7 @@ button { font-family:inherit; cursor:pointer; }
 @keyframes panel-fade-in { from{opacity:0; transform:translateY(4px);} to{opacity:1; transform:translateY(0);} }
 
 .spec-sheet { background:var(--color-surface); border:1.5px solid var(--color-border); border-radius:var(--radius-card); box-shadow:var(--shadow-card); overflow:hidden; }
+.record-highlight { box-shadow:0 0 0 3px var(--color-accent), var(--shadow-card) !important; transition:box-shadow 1.6s ease .8s; }
 .spec-sheet-header { background:var(--color-panel); color:#fff; padding:12px 18px; font-family:var(--font-mono); font-size:12px; letter-spacing:.06em; text-transform:uppercase; display:flex; justify-content:space-between; align-items:center; }
 .spec-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); }
 .spec-cell { padding:12px 18px; border-right:1px solid var(--color-border); border-bottom:1px solid var(--color-border); }
@@ -464,6 +465,15 @@ function formatDateDMY(iso){ if(!iso) return ''; const d=new Date(iso); if(isNaN
 function daysUntil(iso){ if(!iso) return null; const d=new Date(iso+'T00:00:00'); if(isNaN(d.getTime())) return null; const today=new Date(); today.setHours(0,0,0,0); return Math.round((d-today)/86400000); }
 function addDaysIso(iso, days){ const d=new Date(iso+'T00:00:00'); if(isNaN(d.getTime())) return ''; d.setDate(d.getDate()+days); const p=n=>String(n).padStart(2,'0'); return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate()); }
 function nextId(prefix){ return prefix+'_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,8); }
+
+function logActivity(action, recordType, recordLabel, linkHash){
+  DB.activityLog = DB.activityLog || [];
+  const entry = { id: nextId('log'), actorEmail: currentUserEmail||'admin', action, recordType, recordLabel, linkHash: linkHash||null, timestamp: new Date().toISOString() };
+  DB.activityLog.push(entry);
+  const cutoff = Date.now() - 30*24*60*60*1000;
+  DB.activityLog = DB.activityLog.filter(e=>{ const t=new Date(e.timestamp).getTime(); return isNaN(t) || t >= cutoff; });
+  return entry;
+}
 function toast(message, type){
   type = type || 'info';
   let region = document.getElementById('toast-region');
@@ -639,6 +649,7 @@ async function fetchAndNormalizeDb(){
   fresh.stationBreakdowns = fresh.stationBreakdowns || [];
   fresh.pmRecords = fresh.pmRecords || [];
   fresh.accessList = fresh.accessList || [];
+  fresh.activityLog = fresh.activityLog || [];
   fresh.vibrationRecords.forEach(r=>{ if(r.remarks===undefined || r.remarks===null) r.remarks = ''; });
   return fresh;
 }
@@ -813,11 +824,11 @@ function renderRoute(){
   if(!hasPassedGate()){ renderGateScreen(); return; } // hash is left untouched -- once past the gate, renderRoute() re-runs and honors it
   const hash = location.hash || '#/';
   const stationMatch = hash.match(/^#\/station\/(.+)$/);
-  const equipmentMatch = hash.match(/^#\/equipment\/([^/]+)(?:\/tab\/([a-z]+))?$/);
+  const equipmentMatch = hash.match(/^#\/equipment\/([^/]+)(?:\/tab\/([a-z]+))?(?:\/record\/([^/]+))?$/);
   const gloveMatch = hash.match(/^#\/ppe\/gloves\/(.+)$/);
   const contractMatch = hash.match(/^#\/contract\/(.+)$/);
   if(stationMatch) renderStationPage(decodeURIComponent(stationMatch[1]));
-  else if(equipmentMatch) renderEquipmentPage(decodeURIComponent(equipmentMatch[1]), equipmentMatch[2]||undefined);
+  else if(equipmentMatch) renderEquipmentPage(decodeURIComponent(equipmentMatch[1]), equipmentMatch[2]||undefined, equipmentMatch[3]?decodeURIComponent(equipmentMatch[3]):undefined);
   else if(hash === '#/safety') renderSafetyPage();
   else if(hash === '#/ppe') renderPpePage();
   else if(hash === '#/ppe/gloves') renderGloveListPage();
@@ -830,6 +841,7 @@ function renderRoute(){
   else if(hash === '#/breakdown-search') renderBreakdownSearchPage();
   else if(hash === '#/admin-settings') renderAdminSettingsPage();
   else if(hash === '#/earthpit-directory') renderEarthPitDirectoryPage();
+  else if(hash === '#/activity-log') renderActivityLogPage();
   else renderHomePage();
   const app = document.getElementById('app');
   app.classList.remove('page-enter');
@@ -1089,41 +1101,122 @@ function renderEquipmentSearchPage(kind){
   const app = document.getElementById('app');
   const isPm = kind==='pm';
   const title = isPm ? 'Preventive Maintenance' : 'Breakdowns';
-  const subtitle = isPm ? 'Search for equipment to view its Preventive Maintenance history.' : 'Search for equipment to view its Breakdown History.';
+  const subtitle = isPm ? 'All PM visits across every station, most recent first.' : 'All breakdown incidents across every station, most recent first.';
+
+  const allRecords = (isPm ? DB.pmRecords : DB.breakdownHistory.filter(b=>b.formType==='v2')).map(r=>{
+    const eq = DB.equipment.find(e=>e.id===r.equipmentId);
+    const station = eq ? DB.stations.find(s=>s.id===eq.stationId) : null;
+    return { r, eq, station };
+  }).filter(x=>x.eq);
+
+  const stationOptions = [...new Set(allRecords.map(x=>x.station?x.station.id:null).filter(Boolean))]
+    .map(id=>DB.stations.find(s=>s.id===id)).filter(Boolean).sort((a,b)=>a.name.localeCompare(b.name));
+  const yearOptions = [...new Set(allRecords.map(x=> isPm ? (x.r.date||'').slice(0,4) : (x.r.breakdownDate||'').slice(0,4)).filter(Boolean))].sort((a,b)=>b.localeCompare(a));
 
   app.innerHTML =
     '<div class="breadcrumb"><a href="#/">Home</a><span class="sep">/</span><span class="current">'+title+'</span></div>'
-    + '<div class="page-header"><div><div class="page-eyebrow">Search</div><h1>'+title+'</h1>'
+    + '<div class="page-header"><div><div class="page-eyebrow">'+title+'</div><h1>'+title+'</h1>'
     + '<div class="page-subtitle">'+subtitle+'</div></div></div>'
-    + '<div class="field" style="max-width:420px;"><input type="text" id="eq-search-input" placeholder="Search by equipment or station name\u2026" autocomplete="off"></div>'
-    + '<div id="eq-search-results" style="margin-top:16px;"></div>';
+    + '<div class="field" style="max-width:420px;"><input type="text" id="eq-search-input" placeholder="Search by equipment, station'+(isPm?'':', or description')+'\u2026" autocomplete="off"></div>'
+    + '<div style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; margin:12px 0 16px;">'
+    + '<div class="field" style="max-width:150px;"><label>Year</label><select id="eq-filter-year"><option value="">All years</option>'+yearOptions.map(y=>'<option value="'+y+'">'+y+'</option>').join('')+'</select></div>'
+    + '<div class="field" style="max-width:220px;"><label>Station</label><select id="eq-filter-station"><option value="">All stations</option>'+stationOptions.map(s=>'<option value="'+s.id+'">'+escapeHtml(s.name)+'</option>').join('')+'</select></div>'
+    + (isPm
+       ? '<label style="display:flex; align-items:center; gap:6px; font-weight:400; padding:8px 0 0;"><input type="checkbox" id="eq-filter-flagged"> Flagged (Not OK) only</label>'
+       : '<div class="field" style="max-width:220px;"><label>Category</label><select id="eq-filter-category"><option value="">All categories</option>'+BREAKDOWN_CATEGORY_OPTIONS.map(c=>'<option value="'+c+'">'+c+'</option>').join('')+'</select></div>'
+         + '<label style="display:flex; align-items:center; gap:6px; font-weight:400; padding:8px 0 0;"><input type="checkbox" id="eq-filter-open"> Open only</label>')
+    + '</div>'
+    + '<div id="eq-list-container"></div>';
 
-  const input = document.getElementById('eq-search-input');
-  const resultsEl = document.getElementById('eq-search-results');
+  let visibleCount = 50;
 
-  const renderResults = (query)=>{
-    const q = query.trim().toLowerCase();
-    if(!q){ resultsEl.innerHTML = '<div class="empty-state"><h3>Start typing to search</h3><p>Search across all equipment by name or station.</p></div>'; return; }
-    const matches = DB.equipment.filter(e=>{
-      const station = DB.stations.find(s=>s.id===e.stationId);
-      return e.name.toLowerCase().includes(q) || (station && station.name.toLowerCase().includes(q));
-    }).slice(0,50);
-    if(matches.length===0){ resultsEl.innerHTML = '<div class="empty-state"><h3>No matches</h3><p>Try a different search term.</p></div>'; return; }
-    resultsEl.innerHTML = '<div class="station-grid">' + matches.map(e=>{
-      const station = DB.stations.find(s=>s.id===e.stationId);
-      const recordCount = isPm ? DB.pmRecords.filter(p=>p.equipmentId===e.id).length : DB.breakdownHistory.filter(b=>b.equipmentId===e.id).length;
-      return '<div class="station-card" data-eq-link="'+e.id+'"><div class="station-tag">'+(station?escapeHtml(station.name):'')+'</div><h3>'+escapeHtml(e.name)+'</h3>'
-        + '<div class="station-meta"><span>'+recordCount+' '+(isPm?'PM record':'breakdown')+(recordCount===1?'':'s')+'</span></div>'
-        + '<div class="station-card-footer"><a href="#/equipment/'+encodeURIComponent(e.id)+'/tab/'+kind+'" class="btn btn-station-open btn-sm">Open &rarr;</a></div></div>';
-    }).join('') + '</div>';
-    resultsEl.querySelectorAll('[data-eq-link]').forEach(card=>{
-      card.addEventListener('click', (e2)=>{ if(e2.target.closest('a,button')) return; location.hash = '#/equipment/'+encodeURIComponent(card.dataset.eqLink)+'/tab/'+kind; });
+  const renderList = (filtered)=>{
+    const container = document.getElementById('eq-list-container');
+    if(filtered.length===0){ container.innerHTML = '<div class="empty-state"><h3>No matching records</h3><p>Try different filters or search terms.</p></div>'; return; }
+    const shown = filtered.slice(0, visibleCount);
+    const rowsHtml = shown.map(x=>{
+      const r = x.r, eq = x.eq, station = x.station;
+      if(isPm){
+        const notOkCount = (r.checklist||[]).filter(c=>c.status==='NOTOK').length;
+        return '<tr class="eq-list-row" data-eq-row="'+eq.id+'|pm|'+r.id+'" style="cursor:pointer;">'
+          + '<td class="mono">'+formatDate(r.date)+'</td><td>'+escapeHtml(station?station.name:'\u2014')+'</td><td>'+escapeHtml(eq.name)+'</td>'
+          + '<td>'+((r.team||[]).length?escapeHtml(r.team.join(', ')):(notOkCount?notOkCount+' item'+(notOkCount===1?'':'s')+' flagged':'\u2014'))+'</td>'
+          + '<td><a href="#" data-eq-report="'+eq.id+'|pm|'+r.id+'" style="color:var(--color-panel); text-decoration:underline;">Report</a></td></tr>';
+      } else {
+        const isOpen = !r.restoredDate;
+        return '<tr class="eq-list-row" data-eq-row="'+eq.id+'|breakdown|'+r.id+'" style="cursor:pointer;">'
+          + '<td class="mono">'+formatDate(r.breakdownDate)+'</td><td>'+escapeHtml(station?station.name:'\u2014')+'</td><td>'+escapeHtml(eq.name)+'</td>'
+          + '<td>'+escapeHtml(r.description||'\u2014')+'</td>'
+          + '<td>'+(isOpen?'<span class="flag flag-warn" style="padding:2px 8px;border-radius:20px;font-weight:600;background:var(--color-danger-bg);color:var(--color-danger);">Open</span>':'<span class="mono">'+formatDate(r.restoredDate)+'</span>')+'</td>'
+          + '<td><a href="#" data-eq-report="'+eq.id+'|breakdown|'+r.id+'" style="color:var(--color-panel); text-decoration:underline;">Report</a></td></tr>';
+      }
+    }).join('');
+    const headerCells = isPm
+      ? '<th>Date</th><th>Station</th><th>Equipment</th><th>Team / Flags</th><th>Report</th>'
+      : '<th>Date</th><th>Station</th><th>Equipment</th><th>Description</th><th>Restored</th><th>Report</th>';
+    container.innerHTML = '<div style="overflow-x:auto;"><table class="data-table"><thead><tr>'+headerCells+'</tr></thead><tbody>'+rowsHtml+'</tbody></table></div>'
+      + (filtered.length>visibleCount
+        ? '<div style="text-align:center; margin-top:16px;"><button class="btn btn-outline btn-sm" id="eq-load-more-btn">Load 50 more (showing '+shown.length+' of '+filtered.length+')</button></div>'
+        : '<div class="helper-text" style="text-align:center; margin-top:12px;">Showing all '+filtered.length+' matching record'+(filtered.length===1?'':'s')+'.</div>');
+
+    container.querySelectorAll('[data-eq-row]').forEach(row=>{
+      row.addEventListener('click', (e)=>{
+        if(e.target.closest('a')) return;
+        const [eqId, tabName, recId] = row.dataset.eqRow.split('|');
+        location.hash = '#/equipment/'+encodeURIComponent(eqId)+'/tab/'+tabName+'/record/'+encodeURIComponent(recId);
+      });
     });
+    container.querySelectorAll('[data-eq-report]').forEach(link=>{
+      link.addEventListener('click', (e)=>{
+        e.preventDefault(); e.stopPropagation();
+        const [eqId, , recId] = link.dataset.eqReport.split('|');
+        const record = isPm ? DB.pmRecords.find(p=>p.id===recId) : DB.breakdownHistory.find(b=>b.id===recId);
+        if(!record) return;
+        if(isPm) openPMReportModal(record, eqId); else openBreakdownV2ReportModal(record, eqId);
+      });
+    });
+    const loadMoreBtn = document.getElementById('eq-load-more-btn');
+    if(loadMoreBtn) loadMoreBtn.addEventListener('click', ()=>{ visibleCount += 50; renderList(filtered); });
   };
 
-  input.addEventListener('input', ()=>renderResults(input.value));
-  renderResults('');
-  input.focus();
+  const applyFilters = ()=>{
+    visibleCount = 50;
+    const q = document.getElementById('eq-search-input').value.trim().toLowerCase();
+    const yearF = document.getElementById('eq-filter-year').value;
+    const stationF = document.getElementById('eq-filter-station').value;
+    let filtered = allRecords.filter(x=>{
+      if(q){
+        const hay = (x.eq.name+' '+(x.station?x.station.name:'')+' '+(isPm?'':(x.r.description||''))).toLowerCase();
+        if(!hay.includes(q)) return false;
+      }
+      if(yearF){
+        const y = isPm ? (x.r.date||'').slice(0,4) : (x.r.breakdownDate||'').slice(0,4);
+        if(y!==yearF) return false;
+      }
+      if(stationF && (!x.station || x.station.id!==stationF)) return false;
+      if(isPm){
+        if(document.getElementById('eq-filter-flagged').checked && !(x.r.checklist||[]).some(c=>c.status==='NOTOK')) return false;
+      } else {
+        const catF = document.getElementById('eq-filter-category').value;
+        if(catF && x.r.category!==catF) return false;
+        if(document.getElementById('eq-filter-open').checked && x.r.restoredDate) return false;
+      }
+      return true;
+    });
+    filtered.sort((a,b)=>{
+      const da = isPm ? (a.r.date||'')+'T'+(a.r.time||'00:00') : (a.r.breakdownDate||'')+'T'+(a.r.breakdownTime||'00:00');
+      const db = isPm ? (b.r.date||'')+'T'+(b.r.time||'00:00') : (b.r.breakdownDate||'')+'T'+(b.r.breakdownTime||'00:00');
+      return db.localeCompare(da);
+    });
+    renderList(filtered);
+  };
+
+  document.getElementById('eq-search-input').addEventListener('input', applyFilters);
+  document.getElementById('eq-filter-year').addEventListener('change', applyFilters);
+  document.getElementById('eq-filter-station').addEventListener('change', applyFilters);
+  if(isPm){ document.getElementById('eq-filter-flagged').addEventListener('change', applyFilters); }
+  else { document.getElementById('eq-filter-category').addEventListener('change', applyFilters); document.getElementById('eq-filter-open').addEventListener('change', applyFilters); }
+  applyFilters();
 }
 function renderPMSearchPage(){ renderEquipmentSearchPage('pm'); }
 function renderBreakdownSearchPage(){ renderEquipmentSearchPage('breakdown'); }
@@ -1362,10 +1455,12 @@ function openStationModal(id){
     const errBox = document.getElementById('modal-form-error');
     if(!name){ errBox.innerHTML = '<div class="form-error">Station name is required.</div>'; return; }
     try {
-      if(station){ station.name = name; }
+      if(station){ station.name = name; logActivity('edited', 'Station', name, '#/station/'+encodeURIComponent(station.id)); }
       else {
         const maxOrder = DB.stations.reduce((m,s)=>Math.max(m,s.sortOrder),-1);
-        DB.stations.push({ id: nextId('stn'), name, sortOrder: maxOrder+1, createdAt: new Date().toISOString() });
+        const newStation = { id: nextId('stn'), name, sortOrder: maxOrder+1, createdAt: new Date().toISOString() };
+        DB.stations.push(newStation);
+        logActivity('added', 'Station', name, '#/station/'+encodeURIComponent(newStation.id));
       }
       await saveDb();
       closeModal();
@@ -1394,6 +1489,7 @@ async function deleteStation(id){
     DB.stationUPS = DB.stationUPS.filter(u=>u.stationId!==id);
     DB.upsTestReports = DB.upsTestReports.filter(r=>r.stationId!==id);
     DB.stationBreakdowns = DB.stationBreakdowns.filter(b=>b.stationId!==id);
+    logActivity('deleted', 'Station', station.name, null);
     await saveDb();
     stationDrawingsToRemove.forEach(d=>{ if(d.fileId) driveDeleteFile(d.fileId); });
     sldsToRemove.forEach(s=>{ if(s.fileId) driveDeleteFile(s.fileId); });
@@ -1521,13 +1617,14 @@ function openEquipmentModal(stationId, equipmentId){
     const errBox = document.getElementById('modal-form-error');
     if(!name){ errBox.innerHTML = '<div class="form-error">Equipment name is required.</div>'; return; }
     try {
-      if(item){ item.name = name; item.category = category; item.runningMode = runningMode; }
+      if(item){ item.name = name; item.category = category; item.runningMode = runningMode; logActivity('edited', 'Equipment', name, '#/equipment/'+encodeURIComponent(item.id)); }
       else {
         const siblings = DB.equipment.filter(e=>e.stationId===stationId);
         const maxOrder = siblings.reduce((m,e)=>Math.max(m,e.sortOrder),-1);
         const newItem = { id: nextId('eqp'), stationId, name, category, runningMode, sortOrder: maxOrder+1, createdAt: new Date().toISOString() };
         DB.equipment.push(newItem);
         DB.nameplates[newItem.id] = {};
+        logActivity('added', 'Equipment', name, '#/equipment/'+encodeURIComponent(newItem.id));
       }
       await saveDb();
       closeModal();
@@ -1632,6 +1729,7 @@ async function deleteEquipment(id, stationId){
     DB.drawings = DB.drawings.filter(d=>d.equipmentId!==id);
     DB.pmRecords = DB.pmRecords.filter(p=>p.equipmentId!==id);
     DB.equipment = DB.equipment.filter(e=>e.id!==id);
+    logActivity('deleted', 'Equipment', item.name, null);
     await saveDb();
     // Best-effort cleanup of the underlying Drive files (not blocking on failures).
     breakdownsToRemove.forEach(b=>{
@@ -1648,7 +1746,7 @@ async function deleteEquipment(id, stationId){
 /* ============================================================
    EQUIPMENT PAGE — tabs: Nameplate / Vibration / Drawings / Breakdown
    ============================================================ */
-function renderEquipmentPage(equipmentId, activeTab){
+function renderEquipmentPage(equipmentId, activeTab, highlightRecordId){
   const app = document.getElementById('app');
   const item = DB.equipment.find(e=>e.id===equipmentId);
   if(!item){ app.innerHTML = '<div class="empty-state"><h3>Equipment not found</h3></div>'; return; }
@@ -1704,8 +1802,22 @@ function renderEquipmentPage(equipmentId, activeTab){
   renderNameplate(equipmentId);
   renderVibration(equipmentId);
   renderDrawings(equipmentId);
-  renderBreakdown(equipmentId);
-  renderPMTab(equipmentId);
+  renderBreakdown(equipmentId, highlightRecordId);
+  renderPMTab(equipmentId, highlightRecordId);
+}
+
+function scrollToAndHighlightRecord(elId, recordId, notFoundLabel){
+  if(!recordId) return;
+  const el = document.getElementById(elId);
+  if(el){
+    const details = el.querySelector('details');
+    if(details) details.open = true;
+    el.classList.add('record-highlight');
+    setTimeout(()=>{ el.scrollIntoView({behavior:'smooth', block:'center'}); }, 60);
+    setTimeout(()=>{ el.classList.remove('record-highlight'); }, 2600);
+  } else {
+    toast('That specific entry is no longer available \u2014 showing all '+notFoundLabel+' for this equipment instead.', 'error');
+  }
 }
 
 /* ---- Nameplate ---- */
@@ -1842,9 +1954,11 @@ function openVibrationModal(equipmentId, record){
     const remarks = document.getElementById('rf-remarks').value.trim();
     const shopRefNo = document.getElementById('rf-shopref').value.trim();
     try {
-      if(record){ record.date=date; record.modeOfOperation=modeOfOperation; record.readings=newReadings; record.remarks=remarks; record.shopRefNo=shopRefNo; }
+      const eqForLog = DB.equipment.find(e=>e.id===equipmentId);
+      if(record){ record.date=date; record.modeOfOperation=modeOfOperation; record.readings=newReadings; record.remarks=remarks; record.shopRefNo=shopRefNo; logActivity('edited', 'Vibration Record', eqForLog?eqForLog.name:'Equipment', '#/equipment/'+encodeURIComponent(equipmentId)+'/tab/vibration'); }
       else {
         DB.vibrationRecords.push({ id: nextId('vib'), equipmentId, date, modeOfOperation, readings: newReadings, remarks, shopRefNo, recordedBy: currentUserEmail||'admin', createdAt: new Date().toISOString() });
+        logActivity('added', 'Vibration Record', eqForLog?eqForLog.name:'Equipment', '#/equipment/'+encodeURIComponent(equipmentId)+'/tab/vibration');
       }
       await saveDb();
       closeModal();
@@ -1858,6 +1972,8 @@ async function deleteVibration(id, equipmentId){
   if(!confirm('Delete this vibration record?')) return;
   try {
     DB.vibrationRecords = DB.vibrationRecords.filter(v=>v.id!==id);
+    const eqForLog = DB.equipment.find(e=>e.id===equipmentId);
+    logActivity('deleted', 'Vibration Record', eqForLog?eqForLog.name:'Equipment', null);
     await saveDb();
     toast('Record deleted.', 'success');
     renderVibration(equipmentId);
@@ -2384,6 +2500,8 @@ function renderEarthPitRegister(stationId, yearId){
       if(!confirm('Delete this earth pit record?')) return;
       try {
         DB.earthPitRecords = DB.earthPitRecords.filter(r=>r.id!==btn.dataset.epDelete);
+        const stForLog = DB.stations.find(s=>s.id===stationId);
+        logActivity('deleted', 'Earth Pit Record', stForLog?stForLog.name:'Station', null);
         await saveDb();
         toast('Record deleted.', 'success');
         renderEarthPitRegister(stationId, yearId);
@@ -2433,8 +2551,9 @@ function openEarthPitModal(stationId, yearId, record){
     EARTHPIT_STATUS_FIELDS.forEach(f=>{ fields[f.key] = document.getElementById('ep-'+f.key+'-input').value; });
     try {
       let newRecord = null, backup = null;
-      if(record){ backup = Object.assign({}, record); Object.assign(record, fields); }
-      else { newRecord = Object.assign({ id: nextId('epr'), stationId, yearId, createdAt: new Date().toISOString() }, fields); DB.earthPitRecords.push(newRecord); }
+      const stForLog = DB.stations.find(s=>s.id===stationId);
+      if(record){ backup = Object.assign({}, record); Object.assign(record, fields); logActivity('edited', 'Earth Pit Record', stForLog?stForLog.name:'Station', '#/station/'+encodeURIComponent(stationId)); }
+      else { newRecord = Object.assign({ id: nextId('epr'), stationId, yearId, createdAt: new Date().toISOString() }, fields); DB.earthPitRecords.push(newRecord); logActivity('added', 'Earth Pit Record', stForLog?stForLog.name:'Station', '#/station/'+encodeURIComponent(stationId)); }
       try {
         await saveDb();
       } catch(saveErr){
@@ -2918,16 +3037,20 @@ function openStationBreakdownModalV2(stationId, record){
         team, photos
       };
       let newRecord = null, backup = null;
-      if(record){ backup = Object.assign({}, record); Object.assign(record, fields); }
+      const stForLog = DB.stations.find(s=>s.id===stationId);
+      let logEntry = null;
+      if(record){ backup = Object.assign({}, record); Object.assign(record, fields); logEntry = logActivity('edited', 'Station Breakdown Record', stForLog?stForLog.name:'Station', '#/station/'+encodeURIComponent(stationId)); }
       else {
         newRecord = Object.assign({ id: nextId('sbdv2'), stationId, recordedBy: currentUserEmail||'admin', createdAt: new Date().toISOString() }, fields);
         DB.stationBreakdowns.push(newRecord);
+        logEntry = logActivity('added', 'Station Breakdown Record', stForLog?stForLog.name:'Station', '#/station/'+encodeURIComponent(stationId));
       }
       try {
         await saveDb();
       } catch(saveErr){
         if(newRecord){ DB.stationBreakdowns = DB.stationBreakdowns.filter(r=>r!==newRecord); }
         else if(record && backup){ Object.assign(record, backup); }
+        if(logEntry){ DB.activityLog = (DB.activityLog||[]).filter(e=>e!==logEntry); }
         throw saveErr;
       }
       closeModal();
@@ -2947,6 +3070,8 @@ async function deleteStationBreakdownV2(id, stationId){
   const rec = DB.stationBreakdowns.find(b=>b.id===id);
   try {
     DB.stationBreakdowns = DB.stationBreakdowns.filter(b=>b.id!==id);
+    const stForLog = DB.stations.find(s=>s.id===stationId);
+    logActivity('deleted', 'Station Breakdown Record', stForLog?stForLog.name:'Station', null);
     await saveDb();
     if(rec && rec.photos){ BREAKDOWN_PHOTO_SLOTS.forEach(s=>{ const p=rec.photos[s.key]; if(p && p.fileId) driveDeleteFile(p.fileId); }); }
     toast('Breakdown record deleted.', 'success');
@@ -3795,10 +3920,11 @@ function openContractModal(id){
     if(!contractName){ errBox.innerHTML = '<div class="form-error">Contract name is required.</div>'; return; }
     try {
       let newContract = null, oldName = null;
-      if(contract){ oldName = contract.contractName; contract.contractName = contractName; }
+      if(contract){ oldName = contract.contractName; contract.contractName = contractName; logActivity('edited', 'Contract', contractName, '#/contract/'+encodeURIComponent(contract.id)); }
       else {
         newContract = { id: nextId('ctr'), contractName, poNo:'', briefDescription:'', contractor:'', startDate:'', expiryDate:'', manpower:'', createdAt: new Date().toISOString() };
         DB.contracts.push(newContract);
+        logActivity('added', 'Contract', contractName, '#/contract/'+encodeURIComponent(newContract.id));
       }
       try {
         await saveDb();
@@ -3821,6 +3947,7 @@ async function deleteContract(id){
     const docsToRemove = DB.contractDocuments.filter(d=>d.contractId===id);
     DB.contracts = DB.contracts.filter(c=>c.id!==id);
     DB.contractDocuments = DB.contractDocuments.filter(d=>d.contractId!==id);
+    logActivity('deleted', 'Contract', contract?contract.contractName:'Contract', null);
     await saveDb();
     docsToRemove.forEach(d=>{ if(d.fileId) driveDeleteFile(d.fileId); });
     toast('Contract deleted.', 'success');
@@ -4003,7 +4130,7 @@ async function deleteContractDoc(id, contractId, docType){
 }
 
 /* ---- Breakdown history ---- */
-function renderBreakdown(equipmentId){
+function renderBreakdown(equipmentId, highlightRecordId){
   const panel = document.getElementById('panel-breakdown');
   const admin = isAdmin();
   const operator = isOperator();
@@ -4023,7 +4150,7 @@ function renderBreakdown(equipmentId){
       return '<div style="text-align:center;"><img src="'+driveViewUrl(p.fileId)+'" alt="'+slot.label+'" data-bdv2-photo="'+r.id+'|'+slot.key+'" style="width:64px;height:64px;object-fit:cover;border-radius:4px;border:1px solid var(--color-border);cursor:pointer;"><div style="font-size:11px; color:var(--color-text-muted); margin-top:4px;">'+slot.label+'</div></div>';
     }).join('');
 
-    return '<div class="spec-sheet" style="margin-bottom:16px;">'
+    return '<div class="spec-sheet" id="bdv2-record-'+r.id+'" style="margin-bottom:16px;">'
       + '<div class="spec-sheet-header">'
       + '<span>'+formatDate(r.breakdownDate)+(r.description?' &middot; '+escapeHtml(r.description):'')+(isOpen?' &middot; <span class="flag flag-warn" style="padding:2px 8px;border-radius:20px;font-weight:600;background:var(--color-danger-bg);color:#fff;">Open</span>':'')+'</span>'
       + '<div style="display:flex; gap:8px;">'
@@ -4078,6 +4205,8 @@ function renderBreakdown(equipmentId){
     + (records.length===0 && v2Records.length===0
       ? '<div class="empty-state"><h3>No breakdown history</h3><p>'+(operator?'Log the first incident above.':'No breakdowns have been recorded for this equipment.')+'</p></div>'
       : (records.length===0 ? '' : '<table class="data-table"><thead><tr><th>Date</th><th>Description</th><th>Downtime (hrs)</th><th>Root Cause</th><th>Action Taken</th><th>Restored On</th><th>Image</th>'+(operator?'<th></th>':'')+'</tr></thead><tbody>'+rows+'</tbody></table>'));
+
+  if(highlightRecordId) scrollToAndHighlightRecord('bdv2-record-'+highlightRecordId, highlightRecordId, 'breakdown history');
 
   panel.querySelectorAll('[data-breakdown-image]').forEach(img=>{
     img.addEventListener('click', ()=>{
@@ -4337,10 +4466,13 @@ function openBreakdownModalV2(equipmentId, record){
         team, photos
       };
       let newRecord = null, backup = null;
-      if(record){ backup = Object.assign({}, record); Object.assign(record, fields); }
+      const eqForLog = DB.equipment.find(e=>e.id===equipmentId);
+      let logEntry = null;
+      if(record){ backup = Object.assign({}, record); Object.assign(record, fields); logEntry = logActivity('edited', 'Breakdown Record', eqForLog?eqForLog.name:'Equipment', '#/equipment/'+encodeURIComponent(equipmentId)+'/tab/breakdown/record/'+encodeURIComponent(record.id)); }
       else {
         newRecord = Object.assign({ id: nextId('bdv2'), equipmentId, recordedBy: currentUserEmail||'admin', createdAt: new Date().toISOString() }, fields);
         DB.breakdownHistory.push(newRecord);
+        logEntry = logActivity('added', 'Breakdown Record', eqForLog?eqForLog.name:'Equipment', '#/equipment/'+encodeURIComponent(equipmentId)+'/tab/breakdown/record/'+encodeURIComponent(newRecord.id));
       }
       try {
         await saveDb();
@@ -4348,6 +4480,7 @@ function openBreakdownModalV2(equipmentId, record){
         // Roll back the local mutation so it doesn't linger in this session only to vanish on refresh.
         if(newRecord){ DB.breakdownHistory = DB.breakdownHistory.filter(r=>r!==newRecord); }
         else if(record && backup){ Object.assign(record, backup); }
+        if(logEntry){ DB.activityLog = (DB.activityLog||[]).filter(e=>e!==logEntry); }
         throw saveErr;
       }
       closeModal();
@@ -4367,6 +4500,8 @@ async function deleteBreakdownV2(id, equipmentId){
   const rec = DB.breakdownHistory.find(b=>b.id===id);
   try {
     DB.breakdownHistory = DB.breakdownHistory.filter(b=>b.id!==id);
+    const eqForLog = DB.equipment.find(e=>e.id===equipmentId);
+    logActivity('deleted', 'Breakdown Record', eqForLog?eqForLog.name:'Equipment', null);
     await saveDb();
     if(rec && rec.photos){ BREAKDOWN_PHOTO_SLOTS.forEach(s=>{ const p=rec.photos[s.key]; if(p && p.fileId) driveDeleteFile(p.fileId); }); }
     toast('Breakdown record deleted.', 'success');
@@ -4518,7 +4653,7 @@ function getAllTeamMembers(){
 const PM_STATUS_OPTIONS = ['OK','NOTOK','NA'];
 const PM_STATUS_LABELS = { OK:'OK', NOTOK:'Not OK', NA:'N/A' };
 
-function renderPMTab(equipmentId){
+function renderPMTab(equipmentId, highlightRecordId){
   const panel = document.getElementById('panel-pm');
   if(!panel) return;
   const admin = isAdmin();
@@ -4543,7 +4678,7 @@ function renderPMTab(equipmentId){
       return '<div style="text-align:center;"><img src="'+driveViewUrl(p.fileId)+'" alt="'+slot.label+'" data-pm-photo="'+r.id+'|'+slot.key+'" style="width:64px;height:64px;object-fit:cover;border-radius:4px;border:1px solid var(--color-border);cursor:pointer;"><div style="font-size:11px; color:var(--color-text-muted); margin-top:4px;">'+slot.label+'</div></div>';
     }).join('');
 
-    return '<div class="spec-sheet" style="margin-bottom:16px;">'
+    return '<div class="spec-sheet" id="pm-record-'+r.id+'" style="margin-bottom:16px;">'
       + '<div class="spec-sheet-header">'
       + '<span>'+formatDate(r.date)+(r.time?' &middot; '+escapeHtml(r.time):'')+(notOkCount?' &middot; '+notOkCount+' item'+(notOkCount===1?'':'s')+' flagged':'')+'</span>'
       + '<div style="display:flex; gap:8px;">'
@@ -4572,6 +4707,8 @@ function renderPMTab(equipmentId){
     + (records.length===0
       ? '<div class="empty-state"><h3>No preventive maintenance records yet</h3><p>'+(operator?'Log the first PM visit above.':'No PM visits have been recorded for this equipment.')+'</p></div>'
       : cards);
+
+  if(highlightRecordId) scrollToAndHighlightRecord('pm-record-'+highlightRecordId, highlightRecordId, 'preventive maintenance history');
 
   panel.querySelectorAll('[data-pm-photo]').forEach(img=>{
     img.addEventListener('click', ()=>{
@@ -4702,16 +4839,20 @@ function openPMModal(equipmentId, record){
       }
       const fields = { date, time, team, checklist: newChecklist, spares: newSpares, finalRemarks, photos };
       let newRecord = null, backup = null;
-      if(record){ backup = Object.assign({}, record); Object.assign(record, fields); }
+      const eqForLog = DB.equipment.find(e=>e.id===equipmentId);
+      let logEntry = null;
+      if(record){ backup = Object.assign({}, record); Object.assign(record, fields); logEntry = logActivity('edited', 'PM Record', eqForLog?eqForLog.name:'Equipment', '#/equipment/'+encodeURIComponent(equipmentId)+'/tab/pm/record/'+encodeURIComponent(record.id)); }
       else {
         newRecord = Object.assign({ id: nextId('pm'), equipmentId, recordedBy: currentUserEmail||'admin', createdAt: new Date().toISOString() }, fields);
         DB.pmRecords.push(newRecord);
+        logEntry = logActivity('added', 'PM Record', eqForLog?eqForLog.name:'Equipment', '#/equipment/'+encodeURIComponent(equipmentId)+'/tab/pm/record/'+encodeURIComponent(newRecord.id));
       }
       try {
         await saveDb();
       } catch(saveErr){
         if(newRecord){ DB.pmRecords = DB.pmRecords.filter(r=>r!==newRecord); }
         else if(record && backup){ Object.assign(record, backup); }
+        if(logEntry){ DB.activityLog = (DB.activityLog||[]).filter(e=>e!==logEntry); }
         throw saveErr;
       }
       closeModal();
@@ -4731,6 +4872,8 @@ async function deletePM(id, equipmentId){
   const rec = DB.pmRecords.find(p=>p.id===id);
   try {
     DB.pmRecords = DB.pmRecords.filter(p=>p.id!==id);
+    const eqForLog = DB.equipment.find(e=>e.id===equipmentId);
+    logActivity('deleted', 'PM Record', eqForLog?eqForLog.name:'Equipment', null);
     await saveDb();
     if(rec && rec.photos){ PM_PHOTO_SLOTS.forEach(s=>{ const p=rec.photos[s.key]; if(p && p.fileId) driveDeleteFile(p.fileId); }); }
     toast('PM record deleted.', 'success');
@@ -5093,7 +5236,11 @@ function renderAdminSettingsPage(){
       ? '<div class="empty-state"><h3>No additional people yet</h3><p>Add your first Admin or Operator above.</p></div>'
       : '<table class="data-table" style="margin-bottom:32px;"><thead><tr><th>Email</th><th>Role</th><th></th></tr></thead><tbody>'+managedRows+'</tbody></table>')
     + '<div class="page-header" style="margin-top:28px; margin-bottom:14px;"><div><h1 style="font-size:19px;">Homepage (Gate Screen) Banner</h1></div></div>'
-    + '<div class="spec-sheet"><div class="spec-sheet-header"><span>Gate Screen Banner</span></div><div style="padding:18px;">'+bannerSectionHtml+'</div></div>';
+    + '<div class="spec-sheet" style="margin-bottom:24px;"><div class="spec-sheet-header"><span>Gate Screen Banner</span></div><div style="padding:18px;">'+bannerSectionHtml+'</div></div>'
+    + '<div class="page-header" style="margin-top:28px; margin-bottom:14px;"><div><h1 style="font-size:19px;">Activity Log</h1></div></div>'
+    + '<div class="spec-sheet"><div class="spec-sheet-header"><span>Last 30 Days</span></div><div style="padding:18px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">'
+    + '<div class="page-subtitle" style="margin:0;">'+(DB.activityLog||[]).length+' action'+((DB.activityLog||[]).length===1?'':'s')+' logged in the last 30 days across every module.</div>'
+    + '<a href="#/activity-log" class="btn btn-outline btn-sm">Open Activity Log &rarr;</a></div></div>';
 
   document.getElementById('add-access-btn').addEventListener('click', ()=>openAddAccessModal());
   document.querySelectorAll('[data-remove-access]').forEach(btn=>btn.addEventListener('click', ()=>{
@@ -5113,6 +5260,41 @@ function renderAdminSettingsPage(){
   if(replaceBannerBtn) replaceBannerBtn.addEventListener('click', ()=>openBannerUploadModal());
   const removeBannerBtn = document.getElementById('remove-banner-btn');
   if(removeBannerBtn) removeBannerBtn.addEventListener('click', deleteBanner);
+}
+
+function renderActivityLogPage(){
+  const app = document.getElementById('app');
+  if(!isAdmin()){
+    app.innerHTML = '<div class="empty-state"><h3>Admins only</h3><p>You need Admin access to view this page.</p></div>';
+    return;
+  }
+  const cutoff = Date.now() - 30*24*60*60*1000;
+  const entries = (DB.activityLog||[]).filter(e=>{ const t=new Date(e.timestamp).getTime(); return isNaN(t) || t>=cutoff; })
+    .sort((a,b)=>(b.timestamp||'').localeCompare(a.timestamp||''));
+
+  const rows = entries.map(e=>{
+    const actionLabel = e.action==='added'?'added':e.action==='edited'?'edited':'deleted';
+    const rowHtml = '<td class="mono">'+new Date(e.timestamp).toLocaleString('en-IN',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'})+'</td>'
+      + '<td>'+escapeHtml(e.actorEmail||'\u2014')+'</td>'
+      + '<td><span class="mono" style="text-transform:uppercase; font-size:11px; color:var(--color-text-muted);">'+actionLabel+'</span></td>'
+      + '<td>'+escapeHtml(e.recordType||'\u2014')+'</td>'
+      + '<td>'+escapeHtml(e.recordLabel||'\u2014')+'</td>';
+    return e.linkHash
+      ? '<tr class="eq-list-row" data-log-link="'+escapeHtml(e.linkHash)+'" style="cursor:pointer;">'+rowHtml+'</tr>'
+      : '<tr>'+rowHtml+'</tr>';
+  }).join('');
+
+  app.innerHTML =
+    '<div class="breadcrumb"><a href="#/">Home</a><span class="sep">/</span><a href="#/admin-settings">Admin Settings</a><span class="sep">/</span><span class="current">Activity Log</span></div>'
+    + '<div class="page-header"><div><div class="page-eyebrow">Admin</div><h1>Activity Log</h1>'
+    + '<div class="page-subtitle">Every add, edit, and delete across the portal in the last 30 days.</div></div></div>'
+    + (entries.length===0
+      ? '<div class="empty-state"><h3>No activity in the last 30 days</h3><p>Actions across the portal will show up here as they happen.</p></div>'
+      : '<div style="overflow-x:auto;"><table class="data-table"><thead><tr><th>When</th><th>Who</th><th>Action</th><th>Type</th><th>Record</th></tr></thead><tbody>'+rows+'</tbody></table></div>');
+
+  app.querySelectorAll('[data-log-link]').forEach(row=>{
+    row.addEventListener('click', ()=>{ location.hash = row.dataset.logLink; });
+  });
 }
 
 function openAddAccessModal(){
@@ -5137,6 +5319,7 @@ function openAddAccessModal(){
     const newEntry = { email, role, addedBy: currentUserEmail||'admin', addedAt: new Date().toISOString() };
     DB.accessList = DB.accessList || [];
     DB.accessList.push(newEntry);
+    const logEntry = logActivity('added', 'Access Grant ('+role+')', email, '#/admin-settings');
     try {
       await saveDb();
       closeModal();
@@ -5144,6 +5327,7 @@ function openAddAccessModal(){
       renderAdminSettingsPage();
     } catch(e){
       DB.accessList = DB.accessList.filter(a=>a!==newEntry);
+      DB.activityLog = (DB.activityLog||[]).filter(x=>x!==logEntry);
       errBox.innerHTML = '<div class="form-error">'+escapeHtml(e.message)+' (Nothing was saved -- please try again.)</div>';
       saveBtn.disabled=false; saveBtn.textContent='Add';
     }
@@ -5153,12 +5337,14 @@ function openAddAccessModal(){
 async function removeAccessEntry(email){
   const backup = [...(DB.accessList||[])];
   DB.accessList = (DB.accessList||[]).filter(a=>a.email!==email);
+  const logEntry = logActivity('deleted', 'Access Grant', email, '#/admin-settings');
   try {
     await saveDb();
     toast('Access removed for '+email+'.', 'success');
     renderAdminSettingsPage();
   } catch(e){
     DB.accessList = backup;
+    DB.activityLog = (DB.activityLog||[]).filter(x=>x!==logEntry);
     toast(e.message+' (Nothing was saved -- please try again.)', 'error');
   }
 }
