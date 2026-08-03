@@ -5,6 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Electrical Maintenance Portal — EMD, Bhilai Steel Plant</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='11' fill='%23d98e2b'/%3E%3Ctext x='32' y='41' font-family='Consolas,Menlo,monospace' font-size='21' font-weight='700' letter-spacing='-1' fill='%230d2033' text-anchor='middle'%3EEMD%3C/text%3E%3C/svg%3E">
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#16324a">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="EMD Portal">
+<meta name="mobile-web-app-capable" content="yes">
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script id="jspdf-script" src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" defer></script>
 <style>
@@ -491,12 +498,13 @@ function getExtension(name){ return (name||'').split('.').pop().toLowerCase(); }
 /* ============================================================
    Google Drive helpers (plain fetch, no client library needed)
    ============================================================ */
-async function driveFetchPublic(path, params){
+async function driveFetchPublic(path, params, allowRetry){
+  if(allowRetry === undefined) allowRetry = true;
   const url = new URL(DRIVE_FILES_URL + path);
   url.searchParams.set('key', CONFIG.DRIVE_API_KEY);
   Object.entries(params||{}).forEach(([k,v])=>url.searchParams.set(k,v));
   let res;
-  const maxAttempts = 3;
+  const maxAttempts = allowRetry ? 3 : 1;
   for(let attempt=1; attempt<=maxAttempts; attempt++){
     try {
       res = await fetch(url.toString());
@@ -545,8 +553,8 @@ async function driveFetchAuthed(url, options){
   return res;
 }
 
-async function driveGetJson(fileId){
-  const res = await driveFetchPublic('/'+fileId, { alt:'media' });
+async function driveGetJson(fileId, allowRetry){
+  const res = await driveFetchPublic('/'+fileId, { alt:'media' }, allowRetry);
   return res.json();
 }
 
@@ -635,8 +643,8 @@ function drivePdfPreviewUrl(fileId){ return 'https://drive.google.com/file/d/'+f
    Data load / save (whole-file read-modify-write, same strategy
    the original Node server used with its local db.json)
    ============================================================ */
-async function fetchAndNormalizeDb(){
-  const fresh = await driveGetJson(CONFIG.DB_FILE_ID);
+async function fetchAndNormalizeDb(allowRetry){
+  const fresh = await driveGetJson(CONFIG.DB_FILE_ID, allowRetry);
   fresh.stations = fresh.stations || [];
   fresh.equipment = fresh.equipment || [];
   fresh.nameplates = fresh.nameplates || {};
@@ -5431,7 +5439,7 @@ function startAutoRefresh(){
     if(isUserEditing()) return; // don't disrupt someone mid-form
     try {
       const before = JSON.stringify(DB);
-      const fresh = await fetchAndNormalizeDb();
+      const fresh = await fetchAndNormalizeDb(false); // no retries here -- a missed cycle just tries again next time
       if(isUserEditing()) return; // a form was opened while this fetch was in flight -- discard it entirely
       if(JSON.stringify(fresh) !== before){
         DB = fresh;
@@ -5440,7 +5448,7 @@ function startAutoRefresh(){
         window.scrollTo(0, scrollY);
       }
     } catch(e){ console.warn('Auto-refresh failed:', e); }
-  }, 45000);
+  }, 300000);
 }
 
 async function boot(){
@@ -5461,6 +5469,12 @@ async function boot(){
   }
 }
 boot();
+
+if('serviceWorker' in navigator){
+  window.addEventListener('load', ()=>{
+    navigator.serviceWorker.register('sw.js').catch(err=>console.warn('Service worker registration failed:', err));
+  });
+}
 </script>
 </body>
 </html>
