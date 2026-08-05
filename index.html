@@ -830,7 +830,11 @@ function closePreviewModal(){
 }
 
 document.getElementById('modal-close').addEventListener('click', closeModal);
-document.getElementById('modal-overlay').addEventListener('click', (e)=>{ if(e.target.id==='modal-overlay') closeModal(); });
+// Deliberately no backdrop-click-to-close here: every form (PM, Breakdown, Vibration, etc.)
+// uses this overlay, and an accidental tap/click outside it while filling a long form
+// should never silently discard everything typed. The X button and Cancel remain the
+// only ways to dismiss it. The preview overlay (below) is view-only, so it keeps the
+// natural click-outside-to-close behavior.
 document.getElementById('preview-close').addEventListener('click', closePreviewModal);
 document.getElementById('preview-overlay').addEventListener('click', (e)=>{ if(e.target.id==='preview-overlay') closePreviewModal(); });
 document.addEventListener('keydown', (e)=>{
