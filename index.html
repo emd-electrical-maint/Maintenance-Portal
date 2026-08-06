@@ -14,6 +14,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script id="jspdf-script" src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" defer></script>
+<script id="chartjs-script" src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js" defer></script>
 <style>
 /* ============================================================
    EMD Electrical Maintenance Portal — single-file Drive edition
@@ -160,6 +161,12 @@ button { font-family:inherit; cursor:pointer; }
 @keyframes panel-fade-in { from{opacity:0; transform:translateY(4px);} to{opacity:1; transform:translateY(0);} }
 
 .spec-sheet { background:var(--color-surface); border:1.5px solid var(--color-border); border-radius:var(--radius-card); box-shadow:var(--shadow-card); overflow:hidden; }
+.dash-kpi-row { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:16px; margin-bottom:24px; }
+.dash-kpi-card { background:var(--color-surface); border:1.5px solid var(--color-border); border-radius:var(--radius-card); box-shadow:var(--shadow-card); padding:18px 20px; }
+.dash-kpi-label { font-family:var(--font-mono); font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--color-text-muted); margin-bottom:6px; }
+.dash-kpi-value { font-family:var(--font-display); font-size:28px; font-weight:700; color:var(--color-text); }
+.dash-chart-grid { display:grid; grid-template-columns:1fr 1fr; gap:20px; }
+@media (max-width:900px){ .dash-chart-grid{ grid-template-columns:1fr; } }
 .record-highlight { box-shadow:0 0 0 3px var(--color-accent), var(--shadow-card) !important; transition:box-shadow 1.6s ease .8s; }
 .spec-sheet-header { background:var(--color-panel); color:#fff; padding:12px 18px; font-family:var(--font-mono); font-size:12px; letter-spacing:.06em; text-transform:uppercase; display:flex; justify-content:space-between; align-items:center; }
 .spec-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); }
@@ -468,6 +475,16 @@ const STATION_EVENT_OPTIONS = ['Incomer Trip','Incomer Feeder Trip from Substati
 const AFFECTED_AREA_OPTIONS = ['Entire Station','Section-1','Section-2','HT Side','All Equipment Tripped','Other'];
 const STATION_BREAKDOWN_CATEGORY_OPTIONS = ['Electrical','Process Issue / Interlock Failure','Mechanical','Instrumentation','Power Systems','Human Error','Other'];
 const STATION_CONTRIBUTING_FACTORS = ['Power Failure','Power dip','Cable failure','Loose connection','Loose terminal','Protection relay setting','Overall Interlock malfunction','Busbar fault','Flashover','Ageing equipment','Human error','Unknown','Other'];
+function durationHours(startDate, startTime, endDate, endTime){
+  if(!startDate || !endDate) return null;
+  const start = new Date(startDate+'T'+(startTime||'00:00')+':00');
+  const end = new Date(endDate+'T'+(endTime||'00:00')+':00');
+  if(isNaN(start.getTime())||isNaN(end.getTime())) return null;
+  let ms = end - start;
+  if(ms<0) ms = 0;
+  return ms/3600000;
+}
+
 function formatDurationDHM(startDate, startTime, endDate, endTime){
   if(!startDate) return '\u2014';
   if(!endDate) return 'Ongoing';
@@ -885,6 +902,7 @@ function renderRoute(){
   else if(hash === '#/breakdown-search') renderBreakdownSearchPage();
   else if(hash === '#/admin-settings') renderAdminSettingsPage();
   else if(hash === '#/earthpit-directory') renderEarthPitDirectoryPage();
+  else if(hash === '#/dashboard') renderDashboardPage();
   else if(hash === '#/activity-log') renderActivityLogPage();
   else renderHomePage();
   const app = document.getElementById('app');
@@ -1074,6 +1092,11 @@ function renderHomePage(){
     + '<div class="station-grid"><div class="station-card" data-module-link="#/earthpit-directory"><div class="station-tag">EARTH PIT DIRECTORY</div><h3>Earth Pit Directory</h3>'
     + '<div class="station-meta"><span>'+earthPitRecordCount+' record'+(earthPitRecordCount===1?'':'s')+' on file</span></div>'
     + '<div class="station-card-footer"><a href="#/earthpit-directory" class="btn btn-station-open btn-sm">Open Directory &rarr;</a></div></div></div></div>'
+    + '<div class="module-col"><div class="page-header"><div><h1>Dashboard</h1>'
+    + '<div class="page-subtitle">PM &amp; breakdown insights at a glance</div></div></div>'
+    + '<div class="station-grid"><div class="station-card" data-module-link="#/dashboard"><div class="station-tag">INSIGHTS</div><h3>Dashboard</h3>'
+    + '<div class="station-meta"><span>Trends, MTTR, top offenders</span></div>'
+    + '<div class="station-card-footer"><a href="#/dashboard" class="btn btn-station-open btn-sm">Open Dashboard &rarr;</a></div></div></div></div>'
     + '</div>'
     + '<div class="module-row">'
     + '<div class="module-col"><div class="page-header"><div><h1>Electrical Safety</h1>'
@@ -1544,6 +1567,166 @@ async function openEarthPitDirectoryReportModal(year){
   };
   document.getElementById('pm-report-regenerate-btn').addEventListener('click', render);
   render();
+}
+
+/* ============================================================
+   DASHBOARD (open to everyone, including Guests)
+   Charts are scoped to equipment-level breakdown and PM data --
+   Vibration and Earth Pit don't compress well into trend charts
+   and are left to their own dedicated views. Station-level
+   breakdowns use a different category taxonomy from equipment
+   breakdowns, so they're kept out of these charts to avoid mixing
+   two incompatible category vocabularies into one confusing chart.
+   ============================================================ */
+const DASHBOARD_CHART_COLORS = ['#d98e2b','#16324a','#3d6fa8','#2f7a54','#b83b2e','#8a6d3b','#5c6b76','#7c5295'];
+let dashboardChartInstances = {};
+function destroyDashboardCharts(){
+  Object.values(dashboardChartInstances).forEach(c=>{ try{ c.destroy(); }catch(e){} });
+  dashboardChartInstances = {};
+}
+
+async function renderDashboardPage(){
+  const app = document.getElementById('app');
+  const stationOptions = [...DB.stations].sort((a,b)=>a.name.localeCompare(b.name));
+  const allBreakdowns = DB.breakdownHistory.filter(b=>b.formType==='v2');
+  const yearOptions = [...new Set(allBreakdowns.map(b=>(b.breakdownDate||'').slice(0,4)).filter(Boolean))].sort((a,b)=>b.localeCompare(a));
+  const currentYear = String(new Date().getFullYear());
+
+  app.innerHTML =
+    '<div class="breadcrumb"><a href="#/">Home</a><span class="sep">/</span><span class="current">Dashboard</span></div>'
+    + '<div class="page-header"><div><div class="page-eyebrow">Insights</div><h1>Dashboard</h1>'
+    + '<div class="page-subtitle">Preventive maintenance and breakdown trends, drawn from equipment-level records.</div></div></div>'
+    + '<div style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; margin-bottom:20px;">'
+    + '<div class="field" style="max-width:160px;"><label>Year</label><select id="dash-filter-year"><option value="">All time</option>'
+    + yearOptions.map(y=>'<option value="'+y+'" '+(y===currentYear?'selected':'')+'>'+y+'</option>').join('')
+    + '</select></div>'
+    + '<div class="field" style="max-width:240px;"><label>Station</label><select id="dash-filter-station"><option value="">All stations</option>'
+    + stationOptions.map(s=>'<option value="'+s.id+'">'+escapeHtml(s.name)+'</option>').join('')
+    + '</select></div>'
+    + '</div>'
+    + '<div id="dash-kpi-row" class="dash-kpi-row"></div>'
+    + '<div id="dash-charts-container"></div>';
+
+  document.getElementById('dash-filter-year').addEventListener('change', updateDashboard);
+  document.getElementById('dash-filter-station').addEventListener('change', updateDashboard);
+
+  await updateDashboard();
+}
+
+async function updateDashboard(){
+  const kpiRow = document.getElementById('dash-kpi-row');
+  const chartsContainer = document.getElementById('dash-charts-container');
+  if(!kpiRow || !chartsContainer) return;
+
+  const year = document.getElementById('dash-filter-year').value;
+  const stationId = document.getElementById('dash-filter-station').value;
+
+  let breakdowns = DB.breakdownHistory.filter(b=>b.formType==='v2');
+  if(year) breakdowns = breakdowns.filter(b=>(b.breakdownDate||'').slice(0,4)===year);
+  if(stationId){
+    const eqIds = new Set(DB.equipment.filter(e=>e.stationId===stationId).map(e=>e.id));
+    breakdowns = breakdowns.filter(b=>eqIds.has(b.equipmentId));
+  }
+
+  const resolved = breakdowns.filter(b=>b.restoredDate);
+  const totalHours = resolved.reduce((sum,b)=>{ const h=durationHours(b.breakdownDate,b.breakdownTime,b.restoredDate,b.restoredTime); return sum + (h||0); }, 0);
+  const mttr = resolved.length ? (totalHours/resolved.length) : null;
+  const openCount = breakdowns.filter(b=>!b.restoredDate).length;
+  const repeatAnswered = breakdowns.filter(b=>b.repeatBreakdown==='Yes'||b.repeatBreakdown==='No');
+  const repeatYes = breakdowns.filter(b=>b.repeatBreakdown==='Yes').length;
+  const repeatRate = repeatAnswered.length ? Math.round((repeatYes/repeatAnswered.length)*100) : null;
+
+  const relevantEquipment = stationId ? DB.equipment.filter(e=>e.stationId===stationId) : DB.equipment;
+  let onSchedule = 0, tracked = 0;
+  relevantEquipment.forEach(eq=>{
+    const eqPm = DB.pmRecords.filter(p=>p.equipmentId===eq.id);
+    if(eqPm.length===0) return;
+    tracked++;
+    const lastPm = eqPm.reduce((latest,p)=> (!latest || (p.date||'')>(latest.date||'')) ? p : latest, null);
+    const dueDate = addDaysIso(lastPm.date, PM_DUE_INTERVAL_DAYS);
+    const d = daysUntil(dueDate);
+    if(d===null || d>0) onSchedule++;
+  });
+  const pmCompliance = tracked ? Math.round((onSchedule/tracked)*100) : null;
+
+  kpiRow.innerHTML = [
+    { label:'Open Breakdowns', value:String(openCount) },
+    { label:'MTTR (avg. repair time)', value: mttr!==null ? mttr.toFixed(1)+' hrs' : '\u2014' },
+    { label:'PM Compliance', value: pmCompliance!==null ? pmCompliance+'%' : '\u2014' },
+    { label:'Repeat Breakdown Rate', value: repeatRate!==null ? repeatRate+'%' : '\u2014' }
+  ].map(k=>'<div class="dash-kpi-card"><div class="dash-kpi-label">'+k.label+'</div><div class="dash-kpi-value">'+k.value+'</div></div>').join('');
+
+  chartsContainer.innerHTML =
+    '<div class="dash-chart-grid">'
+    + '<div class="spec-sheet"><div class="spec-sheet-header"><span>Breakdowns by Category</span></div><div style="padding:16px;">'+(breakdowns.length?'<canvas id="dash-chart-category" height="220"></canvas>':'<div class="empty-state"><h3>No data</h3><p>No breakdowns in this range.</p></div>')+'</div></div>'
+    + '<div class="spec-sheet"><div class="spec-sheet-header"><span>Top 5 Equipment by Breakdown Count</span></div><div style="padding:16px;">'+(breakdowns.length?'<canvas id="dash-chart-topequipment" height="220"></canvas>':'<div class="empty-state"><h3>No data</h3><p>No breakdowns in this range.</p></div>')+'</div></div>'
+    + '<div class="spec-sheet" style="grid-column:1/-1;"><div class="spec-sheet-header"><span>Breakdown Trend (Last 12 Months)</span></div><div style="padding:16px;"><canvas id="dash-chart-trend" height="120"></canvas></div></div>'
+    + (!stationId ? '<div class="spec-sheet" style="grid-column:1/-1;"><div class="spec-sheet-header"><span>Breakdowns by Station</span></div><div style="padding:16px;">'+(breakdowns.length?'<canvas id="dash-chart-station" height="160"></canvas>':'<div class="empty-state"><h3>No data</h3><p>No breakdowns in this range.</p></div>')+'</div></div>' : '')
+    + '</div>';
+
+  try {
+    await ensureChartJsLoaded();
+  } catch(e){
+    chartsContainer.innerHTML = '<div class="empty-state"><h3>Could not load charts</h3><p>'+escapeHtml(e.message)+'</p></div>';
+    return;
+  }
+  destroyDashboardCharts();
+
+  if(breakdowns.length){
+    const categoryCounts = {};
+    breakdowns.forEach(b=>{ const c=b.category||'Unspecified'; categoryCounts[c]=(categoryCounts[c]||0)+1; });
+    dashboardChartInstances.category = new Chart(document.getElementById('dash-chart-category'), {
+      type:'doughnut',
+      data:{ labels:Object.keys(categoryCounts), datasets:[{ data:Object.values(categoryCounts), backgroundColor:DASHBOARD_CHART_COLORS }] },
+      options:{ plugins:{ legend:{ position:'bottom', labels:{boxWidth:12} } } }
+    });
+
+    const eqCounts = {};
+    breakdowns.forEach(b=>{ eqCounts[b.equipmentId] = (eqCounts[b.equipmentId]||0)+1; });
+    const topEq = Object.entries(eqCounts).sort((a,b)=>b[1]-a[1]).slice(0,5)
+      .map(([eqId,count])=>{ const e=DB.equipment.find(x=>x.id===eqId); return { name: e?e.name:'Unknown', count }; });
+    dashboardChartInstances.topEquipment = new Chart(document.getElementById('dash-chart-topequipment'), {
+      type:'bar',
+      data:{ labels: topEq.map(x=>x.name), datasets:[{ label:'Breakdowns', data: topEq.map(x=>x.count), backgroundColor:'#d98e2b' }] },
+      options:{ indexAxis:'y', plugins:{legend:{display:false}}, scales:{x:{ticks:{precision:0}}} }
+    });
+  }
+
+  // Trend always shows the real last 12 months regardless of the Year filter (which
+  // scopes the KPIs/other charts to a specific year) -- only the Station filter applies.
+  const monthLabels = [];
+  const monthCounts = [];
+  const now = new Date();
+  for(let i=11;i>=0;i--){
+    const d = new Date(now.getFullYear(), now.getMonth()-i, 1);
+    const key = d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
+    monthLabels.push(d.toLocaleDateString('en-IN',{month:'short', year:'2-digit'}));
+    const count = DB.breakdownHistory.filter(b=>b.formType==='v2' && (b.breakdownDate||'').slice(0,7)===key
+      && (!stationId || (DB.equipment.find(e=>e.id===b.equipmentId)||{}).stationId===stationId)
+    ).length;
+    monthCounts.push(count);
+  }
+  dashboardChartInstances.trend = new Chart(document.getElementById('dash-chart-trend'), {
+    type:'line',
+    data:{ labels:monthLabels, datasets:[{ label:'Breakdowns', data:monthCounts, borderColor:'#16324a', backgroundColor:'rgba(22,50,74,.08)', fill:true, tension:.3 }] },
+    options:{ plugins:{legend:{display:false}}, scales:{y:{beginAtZero:true, ticks:{precision:0}}} }
+  });
+
+  if(!stationId && breakdowns.length){
+    const stationCounts = {};
+    breakdowns.forEach(b=>{
+      const eq = DB.equipment.find(e=>e.id===b.equipmentId);
+      if(!eq) return;
+      const st = DB.stations.find(s=>s.id===eq.stationId);
+      const name = st?st.name:'Unknown';
+      stationCounts[name] = (stationCounts[name]||0)+1;
+    });
+    dashboardChartInstances.station = new Chart(document.getElementById('dash-chart-station'), {
+      type:'bar',
+      data:{ labels:Object.keys(stationCounts), datasets:[{ label:'Breakdowns', data:Object.values(stationCounts), backgroundColor:'#3d6fa8' }] },
+      options:{ plugins:{legend:{display:false}}, scales:{y:{beginAtZero:true, ticks:{precision:0}}} }
+    });
+  }
 }
 
 function openBannerUploadModal(){
@@ -5332,6 +5515,31 @@ function ensureJsPDFLoaded(){
       s.onerror = ()=>fail('Could not load the PDF library. Check your internet connection (or ask your network admin to allow cdnjs.cloudflare.com / unpkg.com) and try again.');
       document.head.appendChild(s);
       setTimeout(()=>{ if(!settled) fail('Could not load the PDF library. Check your internet connection (or ask your network admin to allow cdnjs.cloudflare.com / unpkg.com) and try again.'); }, 8000);
+    }
+  });
+}
+
+function ensureChartJsLoaded(){
+  return new Promise((resolve, reject)=>{
+    if(window.Chart){ resolve(); return; }
+    let settled = false;
+    const succeed = ()=>{ if(!settled && window.Chart){ settled = true; clearInterval(poll); resolve(); } };
+    const fail = (msg)=>{ if(!settled){ settled = true; clearInterval(poll); reject(new Error(msg)); } };
+    const existing = document.getElementById('chartjs-script');
+    if(existing){
+      existing.addEventListener('load', succeed);
+      existing.addEventListener('error', ()=>tryFallback());
+    }
+    const poll = setInterval(succeed, 200);
+    setTimeout(()=>{ if(!settled) tryFallback(); }, 6000);
+    function tryFallback(){
+      if(settled) return;
+      const s = document.createElement('script');
+      s.src = 'https://unpkg.com/chart.js@4.4.4/dist/chart.umd.min.js';
+      s.onload = succeed;
+      s.onerror = ()=>fail('Could not load the charting library. Check your internet connection (or ask your network admin to allow cdnjs.cloudflare.com / unpkg.com) and try again.');
+      document.head.appendChild(s);
+      setTimeout(()=>{ if(!settled) fail('Could not load the charting library. Check your internet connection (or ask your network admin to allow cdnjs.cloudflare.com / unpkg.com) and try again.'); }, 8000);
     }
   });
 }
