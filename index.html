@@ -396,6 +396,12 @@ const MOTOR_ONLY_FIELD_DEFS = [
 ];
 const EQUIPMENT_CATEGORIES = ['Motor','Other'];
 const RUNNING_MODES = ['DOL Scheme','VFD Scheme'];
+const VFD_FIELD_DEFS = [
+  { key:'make', label:'VFD Make' },
+  { key:'model', label:'VFD Model' },
+  { key:'rating', label:'VFD Rating' },
+  { key:'serialNo', label:'VFD Serial / S.No.' }
+];
 const VIB_BEARINGS = ['B1','B2','B3','B4'];
 const VIB_AXES = ['H','V','A'];
 const VIB_MODES = ['On-load','Air-load','Decoupled Motor Trial'];
@@ -1115,7 +1121,15 @@ function renderHomePage(){
 function gatherAiSearchData(){
   return {
     stations: DB.stations.map(s=>({ id:s.id, name:s.name })),
-    equipment: DB.equipment.map(e=>({ id:e.id, name:e.name, stationId:e.stationId, category:e.category||'', runningMode:e.runningMode||'' })),
+    equipment: DB.equipment.map(e=>{
+      const np = DB.nameplates[e.id] || {};
+      const activeVfd = e.runningMode==='VFD Scheme' && np.vfdHistory ? np.vfdHistory.find(v=>!v.endDate) : null;
+      return {
+        id:e.id, name:e.name, stationId:e.stationId, category:e.category||'', runningMode:e.runningMode||'',
+        motorMake:np.make||'', motorRatingKW:np.ratingKW||'', motorRatingHP:np.ratingHP||'',
+        activeVfd: activeVfd ? { make:activeVfd.make||'', model:activeVfd.model||'', rating:activeVfd.rating||'', serialNo:activeVfd.serialNo||'' } : null
+      };
+    }),
     breakdowns: DB.breakdownHistory.filter(b=>b.formType==='v2').map(b=>({
       id:b.id, equipmentId:b.equipmentId, description:b.description||'', breakdownDate:b.breakdownDate||'',
       restoredDate:b.restoredDate||'', problem:b.problem==='Other'?(b.problemOther||'Other'):(b.problem||''),
@@ -1816,8 +1830,20 @@ function openEquipmentModal(stationId, equipmentId){
     const runningMode = document.getElementById('equipment-runningmode-input').value;
     const errBox = document.getElementById('modal-form-error');
     if(!name){ errBox.innerHTML = '<div class="form-error">Equipment name is required.</div>'; return; }
+    if(item && item.runningMode==='VFD Scheme' && runningMode!=='VFD Scheme'){
+      const np = DB.nameplates[item.id];
+      const active = np && np.vfdHistory && np.vfdHistory.find(v=>!v.endDate);
+      if(active && !confirm('Current VFD details will be archived, not deleted \u2014 continue?')) return;
+    }
     try {
-      if(item){ item.name = name; item.category = category; item.runningMode = runningMode; logActivity('edited', 'Equipment', name, '#/equipment/'+encodeURIComponent(item.id)); }
+      if(item){
+        if(item.runningMode==='VFD Scheme' && runningMode!=='VFD Scheme'){
+          const np = DB.nameplates[item.id];
+          const active = np && np.vfdHistory && np.vfdHistory.find(v=>!v.endDate);
+          if(active) active.endDate = new Date().toISOString().slice(0,10);
+        }
+        item.name = name; item.category = category; item.runningMode = runningMode; logActivity('edited', 'Equipment', name, '#/equipment/'+encodeURIComponent(item.id));
+      }
       else {
         const siblings = DB.equipment.filter(e=>e.stationId===stationId);
         const maxOrder = siblings.reduce((m,e)=>Math.max(m,e.sortOrder),-1);
@@ -2045,7 +2071,9 @@ function renderNameplate(equipmentId, editMode){
     + (admin ? (editMode
         ? '<div style="display:flex; gap:8px;"><button class="btn btn-outline btn-sm" id="np-cancel">Cancel</button><button class="btn btn-primary btn-sm" id="np-save">Save specs</button></div>'
         : '<button class="btn btn-ghost-light btn-sm" id="np-edit">Edit specs</button>') : '')
-    + '</div><div class="spec-grid">'+cells+notesCell+'</div></div>';
+    + '</div><div class="spec-grid">'+cells+notesCell+'</div></div>'
+    + '<div id="vfd-details-container"></div>'
+    + '<div id="pm-guidance-container"></div>';
 
   if(admin){
     if(editMode){
@@ -2054,6 +2082,7 @@ function renderNameplate(equipmentId, editMode){
         const payload = {};
         panel.querySelectorAll('[data-field]').forEach(el=>{ payload[el.dataset.field] = el.value; });
         try {
+          payload.vfdHistory = (DB.nameplates[equipmentId]||{}).vfdHistory || [];
           DB.nameplates[equipmentId] = payload;
           await saveDb();
           toast('Nameplate specs saved.', 'success');
@@ -2064,7 +2093,201 @@ function renderNameplate(equipmentId, editMode){
       document.getElementById('np-edit').addEventListener('click', ()=>renderNameplate(equipmentId, true));
     }
   }
+  renderVfdSection(equipmentId);
+  renderPmGuidanceSection(equipmentId);
 }
+
+/* ---- VFD Details (only shown when equipment Running Mode = VFD Scheme) ---- */
+function renderVfdSection(equipmentId){
+  const container = document.getElementById('vfd-details-container');
+  if(!container) return;
+  const equipmentItem = DB.equipment.find(e=>e.id===equipmentId);
+  if(!equipmentItem || equipmentItem.runningMode!=='VFD Scheme'){ container.innerHTML=''; return; }
+  const admin = isAdmin();
+  const np = DB.nameplates[equipmentId] || {};
+  const history = np.vfdHistory || [];
+  const active = history.find(v=>!v.endDate);
+  const archived = history.filter(v=>v.endDate).sort((a,b)=>(b.endDate||'').localeCompare(a.endDate||''));
+
+  const bodyHtml = active
+    ? '<div class="spec-grid">'+VFD_FIELD_DEFS.map(f=>{
+        const value = active[f.key]||'';
+        return '<div class="spec-cell"><div class="spec-label">'+f.label+'</div><div class="spec-value '+(value?'':'empty')+'">'+(value?escapeHtml(value):'Not recorded')+'</div></div>';
+      }).join('')
+      + '<div class="spec-cell"><div class="spec-label">In Service Since</div><div class="spec-value" style="font-family:var(--font-body); font-weight:400;">'+(active.startDate?formatDateDMY(active.startDate):'\u2014')+'</div></div>'
+      + '</div>'
+    : '<div class="empty-state" style="padding:30px 16px;"><h3>No active VFD on record</h3><p>'+(admin?'Add details for the current drive, or reactivate one from history below.':'No VFD details recorded for this equipment yet.')+'</p></div>';
+
+  const archivedHtml = archived.length
+    ? '<details style="padding:0 16px 16px;"><summary style="cursor:pointer; padding:8px 0; font-weight:600; font-size:13px;">View VFD History ('+archived.length+')</summary>'
+      + '<table class="data-table" style="border:none; border-radius:0; box-shadow:none;"><thead><tr><th>Make</th><th>Model</th><th>Serial No.</th><th>In Service</th></tr></thead><tbody>'
+      + archived.map(v=>'<tr><td>'+escapeHtml(v.make||'\u2014')+'</td><td>'+escapeHtml(v.model||'\u2014')+'</td><td class="mono">'+escapeHtml(v.serialNo||'\u2014')+'</td>'
+        + '<td class="mono">'+(v.startDate?formatDateDMY(v.startDate):'?')+' \u2013 '+(v.endDate?formatDateDMY(v.endDate):'?')+'</td></tr>').join('')
+      + '</tbody></table></details>'
+    : '';
+
+  container.innerHTML =
+    '<div class="spec-sheet" style="margin-top:16px;"><div class="spec-sheet-header"><span>VFD Details</span>'
+    + (admin ? '<div style="display:flex; gap:8px;">'
+        + (active ? '<button class="btn btn-ghost-light btn-sm" id="vfd-edit-active-btn">Edit</button>' : '')
+        + (!active && archived.length ? '<button class="btn btn-ghost-light btn-sm" id="vfd-reactivate-btn">Reactivate a previous VFD</button>' : '')
+        + (!active ? '<button class="btn btn-ghost-light btn-sm" id="vfd-add-btn">+ Enter New VFD</button>' : '')
+        + '</div>' : '')
+    + '</div>'
+    + bodyHtml
+    + archivedHtml
+    + '</div>';
+
+  const addBtn = document.getElementById('vfd-add-btn');
+  if(addBtn) addBtn.addEventListener('click', ()=>openVfdModal(equipmentId));
+  const editBtn = document.getElementById('vfd-edit-active-btn');
+  if(editBtn) editBtn.addEventListener('click', ()=>openVfdModal(equipmentId, active));
+  const reactivateBtn = document.getElementById('vfd-reactivate-btn');
+  if(reactivateBtn) reactivateBtn.addEventListener('click', ()=>openVfdReactivateModal(equipmentId, archived));
+}
+
+function openVfdModal(equipmentId, existing){
+  openModal(
+    existing ? 'Edit VFD Details' : 'Enter New VFD Details',
+    '<div id="modal-form-error"></div>'
+    + VFD_FIELD_DEFS.map(f=>'<div class="field"><label>'+f.label+'</label><input type="text" id="vfd-'+f.key+'-input" value="'+escapeHtml(existing?existing[f.key]||'':'')+'"></div>').join(''),
+    '<button class="btn btn-outline" id="modal-cancel-btn">Cancel</button><button class="btn btn-primary" id="modal-save-btn">Save</button>'
+  );
+  document.getElementById('modal-cancel-btn').addEventListener('click', closeModal);
+  document.getElementById('modal-save-btn').addEventListener('click', async ()=>{
+    const errBox = document.getElementById('modal-form-error');
+    const fields = {};
+    VFD_FIELD_DEFS.forEach(f=>{ fields[f.key] = document.getElementById('vfd-'+f.key+'-input').value.trim(); });
+    if(!fields.make && !fields.model && !fields.serialNo){ errBox.innerHTML = '<div class="form-error">Enter at least a Make, Model, or Serial No.</div>'; return; }
+    try {
+      DB.nameplates[equipmentId] = DB.nameplates[equipmentId] || {};
+      DB.nameplates[equipmentId].vfdHistory = DB.nameplates[equipmentId].vfdHistory || [];
+      if(existing){ Object.assign(existing, fields); }
+      else {
+        DB.nameplates[equipmentId].vfdHistory.push(Object.assign({ id: nextId('vfd'), startDate: new Date().toISOString().slice(0,10), endDate: null }, fields));
+      }
+      await saveDb();
+      closeModal();
+      toast('VFD details saved.', 'success');
+      renderVfdSection(equipmentId);
+    } catch(e){ errBox.innerHTML = '<div class="form-error">'+escapeHtml(e.message)+'</div>'; }
+  });
+}
+
+function openVfdReactivateModal(equipmentId, archived){
+  const rows = archived.map(v=>
+    '<div class="station-card" data-reactivate-vfd="'+v.id+'" style="cursor:pointer; margin-bottom:10px; padding:14px 16px;">'
+    + '<h3 style="margin:0 0 6px; font-size:15px;">'+escapeHtml(v.make||'Unknown Make')+' '+escapeHtml(v.model||'')+'</h3>'
+    + '<div class="station-meta"><span>S.No: '+escapeHtml(v.serialNo||'\u2014')+' &middot; In service '+(v.startDate?formatDateDMY(v.startDate):'?')+' \u2013 '+(v.endDate?formatDateDMY(v.endDate):'?')+'</span></div>'
+    + '</div>'
+  ).join('');
+  openModal(
+    'Reactivate a Previous VFD',
+    '<div id="modal-form-error"></div><p class="helper-text">Select the drive that has been reinstalled on this equipment.</p>' + rows,
+    '<button class="btn btn-outline" id="modal-cancel-btn">Cancel</button>'
+  );
+  document.getElementById('modal-cancel-btn').addEventListener('click', closeModal);
+  document.querySelectorAll('[data-reactivate-vfd]').forEach(card=>{
+    card.addEventListener('click', async ()=>{
+      const v = archived.find(x=>x.id===card.dataset.reactivateVfd);
+      const errBox = document.getElementById('modal-form-error');
+      try {
+        v.endDate = null;
+        v.startDate = new Date().toISOString().slice(0,10);
+        await saveDb();
+        closeModal();
+        toast('VFD reactivated.', 'success');
+        renderVfdSection(equipmentId);
+      } catch(e){ errBox.innerHTML = '<div class="form-error">'+escapeHtml(e.message)+'</div>'; }
+    });
+  });
+}
+
+/* ============================================================
+   GENERAL PM GUIDANCE (Admin-only, web-grounded via Gemini)
+   Distinct from AI Search: this one reaches outside your portal's
+   own data entirely, using Google Search grounding through the
+   same Apps Script proxy. Always shown with sources and a stronger
+   disclaimer, since it is general public information, not your
+   own logged history. Includes the equipment's active VFD (if any)
+   so guidance and troubleshooting cover the drive too, not just
+   the motor.
+   ============================================================ */
+function renderPmGuidanceSection(equipmentId){
+  const container = document.getElementById('pm-guidance-container');
+  if(!container) return;
+  if(!isAdmin() || !CONFIG.AI_PROXY_URL){ container.innerHTML=''; return; }
+  const equipmentItem = DB.equipment.find(e=>e.id===equipmentId);
+  const np = DB.nameplates[equipmentId] || {};
+  const hasVfd = equipmentItem && equipmentItem.runningMode==='VFD Scheme';
+
+  container.innerHTML =
+    '<div class="spec-sheet" style="margin-top:16px;"><div class="spec-sheet-header"><span>General Maintenance Guidance (Web-Sourced)</span>'
+    + '<button class="btn btn-ghost-light btn-sm" id="pm-guidance-btn">Get General PM Guidance</button></div>'
+    + '<div style="padding:16px;">'
+    + '<p class="helper-text" style="margin:0;">Uses this equipment\u2019s Make and Rating'+(hasVfd?' and its active VFD details':'')+' to search the web for general preventive maintenance and troubleshooting guidance. This is <strong>not</strong> based on your own logged data.</p>'
+    + '<div id="pm-guidance-result"></div>'
+    + '</div></div>';
+
+  document.getElementById('pm-guidance-btn').addEventListener('click', ()=>runGeneralPmGuidance(equipmentId));
+}
+
+async function runGeneralPmGuidance(equipmentId){
+  const resultEl = document.getElementById('pm-guidance-result');
+  if(!resultEl) return;
+  const equipmentItem = DB.equipment.find(e=>e.id===equipmentId);
+  const np = DB.nameplates[equipmentId] || {};
+  if(!np.make && !equipmentItem.category){
+    resultEl.innerHTML = '<div class="form-error" style="margin-top:12px;">Add at least a Make in Nameplate Specs before requesting guidance.</div>';
+    return;
+  }
+  if(!accessToken){ resultEl.innerHTML = '<div class="form-error" style="margin-top:12px;">Please sign in again to use this feature.</div>'; return; }
+
+  const activeVfd = (equipmentItem.runningMode==='VFD Scheme' && np.vfdHistory) ? np.vfdHistory.find(v=>!v.endDate) : null;
+  resultEl.innerHTML = '<div class="helper-text" style="margin-top:12px;">Searching\u2026</div>';
+  try {
+    const payload = {
+      accessToken,
+      mode: 'generalGuidance',
+      equipment: {
+        category: equipmentItem.category||'',
+        equipmentType: np.equipmentType||'',
+        make: np.make||'',
+        ratingKW: np.ratingKW||'',
+        ratingHP: np.ratingHP||'',
+        activeVfd: activeVfd ? { make:activeVfd.make||'', model:activeVfd.model||'', rating:activeVfd.rating||'', serialNo:activeVfd.serialNo||'' } : null
+      }
+    };
+    const res = await fetch(CONFIG.AI_PROXY_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // avoids a CORS preflight, which Apps Script web apps don't handle
+      body: JSON.stringify(payload)
+    });
+    const json = await res.json();
+    renderPmGuidanceAnswer(json);
+  } catch(e){
+    resultEl.innerHTML = '<div class="form-error" style="margin-top:12px;">Could not reach AI service: '+escapeHtml(e.message)+'</div>';
+  }
+}
+
+function renderPmGuidanceAnswer(json){
+  const resultEl = document.getElementById('pm-guidance-result');
+  if(!resultEl) return;
+  if(json.error){
+    resultEl.innerHTML = '<div class="form-error" style="margin-top:12px;">'+escapeHtml(json.error)+'</div>';
+    return;
+  }
+  const sources = (json.sources||[]).map(s=>
+    '<a href="'+escapeHtml(s.uri)+'" target="_blank" rel="noopener" style="display:block; font-size:12.5px; color:var(--color-panel); text-decoration:underline; margin-top:4px;">'+escapeHtml(s.title||s.uri)+'</a>'
+  ).join('');
+  resultEl.innerHTML =
+    '<div style="margin-top:14px; padding-top:14px; border-top:1px solid var(--color-border);">'
+    + '<div style="white-space:pre-wrap; line-height:1.6;">'+escapeHtml(json.answer||'No answer returned.')+'</div>'
+    + (sources ? '<div style="margin-top:12px;"><div class="spec-label" style="margin-bottom:4px;">Sources</div>'+sources+'</div>' : '')
+    + '<div class="helper-text" style="margin-top:14px; padding-top:12px; border-top:1px solid var(--color-border);">General guidance based on public information \u2014 always verify against the manufacturer\u2019s official manual before performing maintenance.</div>'
+    + '</div>';
+}
+
 
 /* ---- Vibration records ---- */
 function renderVibration(equipmentId){
