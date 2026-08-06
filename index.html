@@ -14,7 +14,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script id="jspdf-script" src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" defer></script>
-<script id="chartjs-script" src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js" defer></script>
+<script id="chartjs-script" src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.5.0/chart.umd.min.js" defer></script>
 <style>
 /* ============================================================
    EMD Electrical Maintenance Portal — single-file Drive edition
@@ -121,7 +121,8 @@ button { font-family:inherit; cursor:pointer; }
 .module-row { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:20px; margin-top:28px; align-items:start; }
 .module-row-2 { grid-template-columns:repeat(2,1fr); }
 @media (max-width:600px){ .module-row-2 { grid-template-columns:1fr; } }
-.module-col .page-header { margin-bottom:14px; }
+.module-col .page-header { margin-bottom:14px; min-height:72px; }
+.module-col .page-header h1 { font-size:19px; }
 .module-col .station-grid { grid-template-columns:1fr; }
 .station-card { background:var(--color-surface); border:1.5px solid var(--color-border); border-radius:var(--radius-card); padding:16px 16px 14px; box-shadow:var(--shadow-card); position:relative; transition:transform .28s cubic-bezier(.22,1,.36,1),box-shadow .28s cubic-bezier(.22,1,.36,1),border-color .28s ease,background-color .28s ease; display:flex; flex-direction:column; gap:8px; height:100%; cursor:pointer; animation:card-rise-in .35s cubic-bezier(.22,1,.36,1) both; animation-delay:var(--delay, 0ms); }
 @keyframes card-rise-in { from{opacity:0; transform:translateY(10px);} to{opacity:1; transform:translateY(0);} }
@@ -5535,11 +5536,20 @@ function ensureChartJsLoaded(){
     function tryFallback(){
       if(settled) return;
       const s = document.createElement('script');
-      s.src = 'https://unpkg.com/chart.js@4.4.4/dist/chart.umd.min.js';
+      s.src = 'https://unpkg.com/chart.js@4.5.0/dist/chart.umd.min.js';
       s.onload = succeed;
-      s.onerror = ()=>fail('Could not load the charting library. Check your internet connection (or ask your network admin to allow cdnjs.cloudflare.com / unpkg.com) and try again.');
+      s.onerror = ()=>tryFallback2();
       document.head.appendChild(s);
-      setTimeout(()=>{ if(!settled) fail('Could not load the charting library. Check your internet connection (or ask your network admin to allow cdnjs.cloudflare.com / unpkg.com) and try again.'); }, 8000);
+      setTimeout(()=>{ if(!settled) tryFallback2(); }, 6000);
+    }
+    function tryFallback2(){
+      if(settled) return;
+      const s = document.createElement('script');
+      s.src = 'https://cdn.jsdelivr.net/npm/chart.js@4.5.0/dist/chart.umd.min.js';
+      s.onload = succeed;
+      s.onerror = ()=>fail('Could not load the charting library. Check your internet connection (or ask your network admin to allow cdnjs.cloudflare.com / unpkg.com / cdn.jsdelivr.net) and try again.');
+      document.head.appendChild(s);
+      setTimeout(()=>{ if(!settled) fail('Could not load the charting library. Check your internet connection (or ask your network admin to allow cdnjs.cloudflare.com / unpkg.com / cdn.jsdelivr.net) and try again.'); }, 8000);
     }
   });
 }
