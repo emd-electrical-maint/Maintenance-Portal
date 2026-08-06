@@ -2147,10 +2147,13 @@ function renderVfdSection(equipmentId){
 }
 
 function openVfdModal(equipmentId, existing){
+  const defaultStartDate = existing ? (existing.startDate || new Date().toISOString().slice(0,10)) : new Date().toISOString().slice(0,10);
   openModal(
     existing ? 'Edit VFD Details' : 'Enter New VFD Details',
     '<div id="modal-form-error"></div>'
-    + VFD_FIELD_DEFS.map(f=>'<div class="field"><label>'+f.label+'</label><input type="text" id="vfd-'+f.key+'-input" value="'+escapeHtml(existing?existing[f.key]||'':'')+'"></div>').join(''),
+    + VFD_FIELD_DEFS.map(f=>'<div class="field"><label>'+f.label+'</label><input type="text" id="vfd-'+f.key+'-input" value="'+escapeHtml(existing?existing[f.key]||'':'')+'"></div>').join('')
+    + '<div class="field"><label>In Service Since</label><input type="date" id="vfd-startDate-input" value="'+defaultStartDate+'">'
+    + '<p class="helper-text" style="margin-top:4px;">Defaults to today, but set this to whenever the drive actually went into service \u2014 including years before this portal existed.</p></div>',
     '<button class="btn btn-outline" id="modal-cancel-btn">Cancel</button><button class="btn btn-primary" id="modal-save-btn">Save</button>'
   );
   document.getElementById('modal-cancel-btn').addEventListener('click', closeModal);
@@ -2158,13 +2161,15 @@ function openVfdModal(equipmentId, existing){
     const errBox = document.getElementById('modal-form-error');
     const fields = {};
     VFD_FIELD_DEFS.forEach(f=>{ fields[f.key] = document.getElementById('vfd-'+f.key+'-input').value.trim(); });
+    const startDate = document.getElementById('vfd-startDate-input').value;
     if(!fields.make && !fields.model && !fields.serialNo){ errBox.innerHTML = '<div class="form-error">Enter at least a Make, Model, or Serial No.</div>'; return; }
+    if(!startDate){ errBox.innerHTML = '<div class="form-error">In Service Since is required.</div>'; return; }
     try {
       DB.nameplates[equipmentId] = DB.nameplates[equipmentId] || {};
       DB.nameplates[equipmentId].vfdHistory = DB.nameplates[equipmentId].vfdHistory || [];
-      if(existing){ Object.assign(existing, fields); }
+      if(existing){ Object.assign(existing, fields); existing.startDate = startDate; }
       else {
-        DB.nameplates[equipmentId].vfdHistory.push(Object.assign({ id: nextId('vfd'), startDate: new Date().toISOString().slice(0,10), endDate: null }, fields));
+        DB.nameplates[equipmentId].vfdHistory.push(Object.assign({ id: nextId('vfd'), startDate, endDate: null }, fields));
       }
       await saveDb();
       closeModal();
