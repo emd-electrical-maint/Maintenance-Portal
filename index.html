@@ -1894,13 +1894,18 @@ function renderStationPage(stationId, activeTab){
 }
 
 function renderStationEquipmentTab(stationId, activeTier){
-  activeTier = activeTier || 'Main';
   const panel = document.getElementById('panel-station-equipment');
   const admin = isAdmin();
+  const station = DB.stations.find(s=>s.id===stationId);
+  const valvesEnabled = Boolean(station && station.valvesTierEnabled);
+  activeTier = activeTier || 'Main';
+  if(activeTier==='Valve' && !valvesEnabled) activeTier = 'Main'; // guard against a stale tab reference after removal
   const allEquipment = DB.equipment.filter(e=>e.stationId===stationId);
   const equipment = allEquipment.filter(e=>(e.tier||'Main')===activeTier).sort((a,b)=>a.sortOrder-b.sortOrder);
   const mainCount = allEquipment.filter(e=>(e.tier||'Main')==='Main').length;
   const auxCount = allEquipment.filter(e=>(e.tier||'Main')==='Auxiliary').length;
+  const valveCount = allEquipment.filter(e=>e.tier==='Valve').length;
+  const tierLabel = activeTier==='Main'?'main':(activeTier==='Auxiliary'?'auxiliary':'isolation valve');
 
   const rows = equipment.map((e,i)=>
     '<div class="equipment-row" data-equipment-link="#/equipment/'+encodeURIComponent(e.id)+'" data-equipment-id="'+e.id+'" draggable="'+(admin?'true':'false')+'" style="--delay:'+Math.min(i*35,280)+'ms;">'
@@ -1920,17 +1925,26 @@ function renderStationEquipmentTab(stationId, activeTier){
     + '<div class="tabs" style="margin:0; border-bottom:none;">'
     + '<button class="tab-btn'+(activeTier==='Main'?' active':'')+'" data-equipment-tier="Main">Main ('+mainCount+')</button>'
     + '<button class="tab-btn'+(activeTier==='Auxiliary'?' active':'')+'" data-equipment-tier="Auxiliary">Auxiliaries ('+auxCount+')</button>'
+    + (valvesEnabled ? '<button class="tab-btn'+(activeTier==='Valve'?' active':'')+'" data-equipment-tier="Valve">Isolation Valves ('+valveCount+')</button>' : '')
     + '</div>'
+    + '<div style="display:flex; gap:8px; flex-wrap:wrap;">'
+    + (admin && !valvesEnabled ? '<button class="btn btn-outline btn-sm" id="add-valve-tier-btn">+ Add Isolation Valves Tracking</button>' : '')
+    + (admin && valvesEnabled && activeTier==='Valve' ? '<button class="btn btn-outline btn-sm" id="remove-valve-tier-btn">Remove Isolation Valves Tracking</button>' : '')
     + (admin ? '<button class="btn btn-outline btn-sm" id="copy-equipment-btn">Copy Equipment</button>' : '')
-    + '</div>'
+    + '</div></div>'
     + '<div id="equipment-list" class="equipment-list">'
-    + (equipment.length===0 ? '<div class="empty-state"><h3>No '+(activeTier==='Main'?'main':'auxiliary')+' equipment yet</h3><p>'+(admin?'Add the first piece of equipment below.':'Check back once an administrator has added equipment.')+'</p></div>' : rows)
+    + (equipment.length===0 ? '<div class="empty-state"><h3>No '+tierLabel+' equipment yet</h3><p>'+(admin?'Add the first piece of equipment below.':'Check back once an administrator has added equipment.')+'</p></div>' : rows)
     + (admin ? '<button class="add-inline-card" id="add-equipment-btn">+ Add equipment</button>' : '')
     + '</div>';
 
   panel.querySelectorAll('[data-equipment-tier]').forEach(btn=>{
     btn.addEventListener('click', ()=>renderStationEquipmentTab(stationId, btn.dataset.equipmentTier));
   });
+
+  const addValveTierBtn = document.getElementById('add-valve-tier-btn');
+  if(addValveTierBtn) addValveTierBtn.addEventListener('click', ()=>enableValveTier(stationId));
+  const removeValveTierBtn = document.getElementById('remove-valve-tier-btn');
+  if(removeValveTierBtn) removeValveTierBtn.addEventListener('click', ()=>disableValveTier(stationId));
 
   const copyBtn = document.getElementById('copy-equipment-btn');
   if(copyBtn) copyBtn.addEventListener('click', ()=>openCopyEquipmentModal(stationId, activeTier));
@@ -1944,6 +1958,45 @@ function renderStationEquipmentTab(stationId, activeTier){
   panel.querySelectorAll('[data-delete-equipment]').forEach(btn=>btn.addEventListener('click',()=>deleteEquipment(btn.dataset.deleteEquipment, stationId)));
 
   if(admin) wireEquipmentDragReorder(panel, stationId, activeTier);
+}
+
+async function enableValveTier(stationId){
+  const station = DB.stations.find(s=>s.id===stationId);
+  if(!station) return;
+  const backup = station.valvesTierEnabled;
+  station.valvesTierEnabled = true;
+  try {
+    await saveDb();
+    toast('Isolation Valves tracking added for this station.', 'success');
+    renderStationEquipmentTab(stationId, 'Valve');
+  } catch(e){
+    station.valvesTierEnabled = backup;
+    toast(e.message+' (Nothing was saved -- please try again.)', 'error');
+    renderStationEquipmentTab(stationId, 'Main');
+  }
+}
+
+async function disableValveTier(stationId){
+  const station = DB.stations.find(s=>s.id===stationId);
+  if(!station) return;
+  const valveEquipment = DB.equipment.filter(e=>e.stationId===stationId && e.tier==='Valve');
+  const msg = valveEquipment.length
+    ? 'Remove Isolation Valves tracking for this station? The '+valveEquipment.length+' valve'+(valveEquipment.length===1?'':'s')+' currently tracked here will move to Auxiliaries \u2014 nothing is deleted, all history stays intact.'
+    : 'Remove Isolation Valves tracking for this station?';
+  if(!confirm(msg)) return;
+  const backup = { enabled: station.valvesTierEnabled, tiers: valveEquipment.map(e=>({ id:e.id, tier:e.tier })) };
+  station.valvesTierEnabled = false;
+  valveEquipment.forEach(e=>{ e.tier = 'Auxiliary'; });
+  try {
+    await saveDb();
+    toast('Isolation Valves tracking removed. Any valves have been moved to Auxiliaries.', 'success');
+    renderStationEquipmentTab(stationId, 'Auxiliary');
+  } catch(e){
+    station.valvesTierEnabled = backup.enabled;
+    backup.tiers.forEach(b=>{ const eq = DB.equipment.find(x=>x.id===b.id); if(eq) eq.tier = b.tier; });
+    toast(e.message+' (Nothing was saved -- please try again.)', 'error');
+    renderStationEquipmentTab(stationId, 'Valve');
+  }
 }
 
 function wireEquipmentDragReorder(panel, stationId, activeTier){
@@ -2009,12 +2062,15 @@ async function saveEquipmentOrder(list, stationId, activeTier){
 
 function openEquipmentModal(stationId, equipmentId, defaultTier){
   const item = equipmentId ? DB.equipment.find(e=>e.id===equipmentId) : null;
+  const station = DB.stations.find(s=>s.id===stationId);
+  const valvesEnabled = Boolean(station && station.valvesTierEnabled);
   const currentCategory = item ? (item.category || 'Other') : 'Other';
   const currentRunningMode = item ? (item.runningMode || 'DOL Scheme') : 'DOL Scheme';
   const currentTier = item ? (item.tier || 'Main') : (defaultTier || 'Main');
+  const availableTiers = (valvesEnabled || currentTier==='Valve') ? EQUIPMENT_TIERS.concat('Valve') : EQUIPMENT_TIERS;
   const categoryOptions = EQUIPMENT_CATEGORIES.map(c=>'<option value="'+c+'" '+(currentCategory===c?'selected':'')+'>'+c+'</option>').join('');
   const runningModeOptions = RUNNING_MODES.map(m=>'<option value="'+m+'" '+(currentRunningMode===m?'selected':'')+'>'+m+'</option>').join('');
-  const tierOptions = EQUIPMENT_TIERS.map(t=>'<option value="'+t+'" '+(currentTier===t?'selected':'')+'>'+t+'</option>').join('');
+  const tierOptions = availableTiers.map(t=>'<option value="'+t+'" '+(currentTier===t?'selected':'')+'>'+(t==='Valve'?'Isolation Valve':t)+'</option>').join('');
   openModal(
     item ? 'Rename Equipment' : 'Add Equipment',
     '<div id="modal-form-error"></div>'
@@ -2132,6 +2188,8 @@ function openCopyEquipmentConfirmModal(targetStationId, sourceId, activeTier){
       const siblings = DB.equipment.filter(e=>e.stationId===targetStationId);
       const maxOrder = siblings.reduce((m,e)=>Math.max(m,e.sortOrder),-1);
       const newTier = source.tier || 'Main';
+      const targetStation = DB.stations.find(s=>s.id===targetStationId);
+      if(newTier==='Valve' && targetStation && !targetStation.valvesTierEnabled) targetStation.valvesTierEnabled = true;
       const newItem = { id: nextId('eqp'), stationId: targetStationId, name, category: source.category || 'Other', runningMode: source.runningMode || 'DOL Scheme', tier: newTier, sortOrder: maxOrder+1, createdAt: new Date().toISOString() };
       DB.equipment.push(newItem);
       // Shallow-copy every Nameplate Spec field from the source (Make, Rating, Equipment Type,
