@@ -404,6 +404,7 @@ const MOTOR_ONLY_FIELD_DEFS = [
 ];
 const EQUIPMENT_CATEGORIES = ['Motor','Other'];
 const RUNNING_MODES = ['DOL Scheme','VFD Scheme'];
+const EQUIPMENT_TIERS = ['Main','Auxiliary'];
 const VFD_FIELD_DEFS = [
   { key:'make', label:'VFD Make' },
   { key:'model', label:'VFD Model' },
@@ -709,6 +710,7 @@ async function fetchAndNormalizeDb(allowRetry){
   fresh.accessList = fresh.accessList || [];
   fresh.activityLog = fresh.activityLog || [];
   fresh.vibrationRecords.forEach(r=>{ if(r.remarks===undefined || r.remarks===null) r.remarks = ''; });
+  fresh.equipment.forEach(e=>{ if(!e.tier) e.tier = 'Main'; });
   return fresh;
 }
 
@@ -1891,10 +1893,14 @@ function renderStationPage(stationId, activeTab){
   if(addUpsBtn) addUpsBtn.addEventListener('click', ()=>addUPSInstallation(stationId));
 }
 
-function renderStationEquipmentTab(stationId){
+function renderStationEquipmentTab(stationId, activeTier){
+  activeTier = activeTier || 'Main';
   const panel = document.getElementById('panel-station-equipment');
   const admin = isAdmin();
-  const equipment = DB.equipment.filter(e=>e.stationId===stationId).sort((a,b)=>a.sortOrder-b.sortOrder);
+  const allEquipment = DB.equipment.filter(e=>e.stationId===stationId);
+  const equipment = allEquipment.filter(e=>(e.tier||'Main')===activeTier).sort((a,b)=>a.sortOrder-b.sortOrder);
+  const mainCount = allEquipment.filter(e=>(e.tier||'Main')==='Main').length;
+  const auxCount = allEquipment.filter(e=>(e.tier||'Main')==='Auxiliary').length;
 
   const rows = equipment.map((e,i)=>
     '<div class="equipment-row" data-equipment-link="#/equipment/'+encodeURIComponent(e.id)+'" data-equipment-id="'+e.id+'" draggable="'+(admin?'true':'false')+'" style="--delay:'+Math.min(i*35,280)+'ms;">'
@@ -1910,27 +1916,37 @@ function renderStationEquipmentTab(stationId){
   ).join('');
 
   panel.innerHTML =
-    (admin ? '<div style="display:flex; justify-content:flex-end; margin-bottom:10px;"><button class="btn btn-outline btn-sm" id="copy-equipment-btn">Copy Equipment</button></div>' : '')
+    '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:10px;">'
+    + '<div class="tabs" style="margin:0; border-bottom:none;">'
+    + '<button class="tab-btn'+(activeTier==='Main'?' active':'')+'" data-equipment-tier="Main">Main ('+mainCount+')</button>'
+    + '<button class="tab-btn'+(activeTier==='Auxiliary'?' active':'')+'" data-equipment-tier="Auxiliary">Auxiliaries ('+auxCount+')</button>'
+    + '</div>'
+    + (admin ? '<button class="btn btn-outline btn-sm" id="copy-equipment-btn">Copy Equipment</button>' : '')
+    + '</div>'
     + '<div id="equipment-list" class="equipment-list">'
-    + (equipment.length===0 ? '<div class="empty-state"><h3>No equipment added yet</h3><p>'+(admin?'Add the first piece of equipment below.':'Check back once an administrator has added equipment.')+'</p></div>' : rows)
+    + (equipment.length===0 ? '<div class="empty-state"><h3>No '+(activeTier==='Main'?'main':'auxiliary')+' equipment yet</h3><p>'+(admin?'Add the first piece of equipment below.':'Check back once an administrator has added equipment.')+'</p></div>' : rows)
     + (admin ? '<button class="add-inline-card" id="add-equipment-btn">+ Add equipment</button>' : '')
     + '</div>';
 
+  panel.querySelectorAll('[data-equipment-tier]').forEach(btn=>{
+    btn.addEventListener('click', ()=>renderStationEquipmentTab(stationId, btn.dataset.equipmentTier));
+  });
+
   const copyBtn = document.getElementById('copy-equipment-btn');
-  if(copyBtn) copyBtn.addEventListener('click', ()=>openCopyEquipmentModal(stationId));
+  if(copyBtn) copyBtn.addEventListener('click', ()=>openCopyEquipmentModal(stationId, activeTier));
 
   panel.querySelectorAll('.equipment-row').forEach(row=>{
     row.addEventListener('click',(e)=>{ if(e.target.closest('a,button')) return; location.hash = row.dataset.equipmentLink; });
   });
   const addBtn = document.getElementById('add-equipment-btn');
-  if(addBtn) addBtn.addEventListener('click', ()=>openEquipmentModal(stationId));
-  panel.querySelectorAll('[data-edit-equipment]').forEach(btn=>btn.addEventListener('click',()=>openEquipmentModal(stationId, btn.dataset.editEquipment)));
+  if(addBtn) addBtn.addEventListener('click', ()=>openEquipmentModal(stationId, null, activeTier));
+  panel.querySelectorAll('[data-edit-equipment]').forEach(btn=>btn.addEventListener('click',()=>openEquipmentModal(stationId, btn.dataset.editEquipment, activeTier)));
   panel.querySelectorAll('[data-delete-equipment]').forEach(btn=>btn.addEventListener('click',()=>deleteEquipment(btn.dataset.deleteEquipment, stationId)));
 
-  if(admin) wireEquipmentDragReorder(panel, stationId);
+  if(admin) wireEquipmentDragReorder(panel, stationId, activeTier);
 }
 
-function wireEquipmentDragReorder(panel, stationId){
+function wireEquipmentDragReorder(panel, stationId, activeTier){
   const list = document.getElementById('equipment-list');
   if(!list) return;
   let dragArmedRow = null;
@@ -1972,35 +1988,39 @@ function wireEquipmentDragReorder(panel, stationId){
       const before = (e.clientY - rect.top) < rect.height/2;
       if(before) row.parentNode.insertBefore(draggingRow, row);
       else row.parentNode.insertBefore(draggingRow, row.nextSibling);
-      await saveEquipmentOrder(list, stationId);
+      await saveEquipmentOrder(list, stationId, activeTier);
     });
   });
 }
 
-async function saveEquipmentOrder(list, stationId){
+async function saveEquipmentOrder(list, stationId, activeTier){
   const orderedIds = Array.from(list.querySelectorAll('.equipment-row')).map(r=>r.dataset.equipmentId);
   const backup = orderedIds.map(id=>({ id, sortOrder: DB.equipment.find(e=>e.id===id).sortOrder }));
   orderedIds.forEach((id,i)=>{ const eq = DB.equipment.find(e=>e.id===id); if(eq) eq.sortOrder = i; });
   try {
     await saveDb();
-    renderStationEquipmentTab(stationId);
+    renderStationEquipmentTab(stationId, activeTier);
   } catch(e){
     backup.forEach(b=>{ const eq = DB.equipment.find(x=>x.id===b.id); if(eq) eq.sortOrder = b.sortOrder; });
     toast(e.message+' (Order was not saved -- please try again.)', 'error');
-    renderStationEquipmentTab(stationId);
+    renderStationEquipmentTab(stationId, activeTier);
   }
 }
 
-function openEquipmentModal(stationId, equipmentId){
+function openEquipmentModal(stationId, equipmentId, defaultTier){
   const item = equipmentId ? DB.equipment.find(e=>e.id===equipmentId) : null;
   const currentCategory = item ? (item.category || 'Other') : 'Other';
   const currentRunningMode = item ? (item.runningMode || 'DOL Scheme') : 'DOL Scheme';
+  const currentTier = item ? (item.tier || 'Main') : (defaultTier || 'Main');
   const categoryOptions = EQUIPMENT_CATEGORIES.map(c=>'<option value="'+c+'" '+(currentCategory===c?'selected':'')+'>'+c+'</option>').join('');
   const runningModeOptions = RUNNING_MODES.map(m=>'<option value="'+m+'" '+(currentRunningMode===m?'selected':'')+'>'+m+'</option>').join('');
+  const tierOptions = EQUIPMENT_TIERS.map(t=>'<option value="'+t+'" '+(currentTier===t?'selected':'')+'>'+t+'</option>').join('');
   openModal(
     item ? 'Rename Equipment' : 'Add Equipment',
     '<div id="modal-form-error"></div>'
     + '<div class="field"><label>Equipment name</label><input type="text" id="equipment-name-input" value="'+escapeHtml(item?item.name:'')+'" placeholder="e.g. P-1 Booster Motor"></div>'
+    + '<div class="field"><label>Tier</label><select id="equipment-tier-input">'+tierOptions+'</select>'
+    + '<div class="helper-text">Main equipment leads the Equipment tab; Auxiliaries (valves, exhaust fans, dewatering pumps, etc.) sit in their own tab so they don\u2019t clutter the main list, while still getting full tracking.</div></div>'
     + '<div class="field"><label>Running Mode</label><select id="equipment-runningmode-input">'+runningModeOptions+'</select>'
     + '<div class="helper-text">Equipment running on a VFD Scheme shows a badge in the equipment list. Change this any time the starter configuration is converted.</div></div>'
     + '<div class="field"><label>Equipment Category</label><select id="equipment-category-input">'+categoryOptions+'</select>'
@@ -2012,6 +2032,7 @@ function openEquipmentModal(stationId, equipmentId){
     const name = document.getElementById('equipment-name-input').value.trim();
     const category = document.getElementById('equipment-category-input').value;
     const runningMode = document.getElementById('equipment-runningmode-input').value;
+    const tier = document.getElementById('equipment-tier-input').value;
     const errBox = document.getElementById('modal-form-error');
     if(!name){ errBox.innerHTML = '<div class="form-error">Equipment name is required.</div>'; return; }
     if(item && item.runningMode==='VFD Scheme' && runningMode!=='VFD Scheme'){
@@ -2026,12 +2047,12 @@ function openEquipmentModal(stationId, equipmentId){
           const active = np && np.vfdHistory && np.vfdHistory.find(v=>!v.endDate);
           if(active) active.endDate = new Date().toISOString().slice(0,10);
         }
-        item.name = name; item.category = category; item.runningMode = runningMode; logActivity('edited', 'Equipment', name, '#/equipment/'+encodeURIComponent(item.id));
+        item.name = name; item.category = category; item.runningMode = runningMode; item.tier = tier; logActivity('edited', 'Equipment', name, '#/equipment/'+encodeURIComponent(item.id));
       }
       else {
         const siblings = DB.equipment.filter(e=>e.stationId===stationId);
         const maxOrder = siblings.reduce((m,e)=>Math.max(m,e.sortOrder),-1);
-        const newItem = { id: nextId('eqp'), stationId, name, category, runningMode, sortOrder: maxOrder+1, createdAt: new Date().toISOString() };
+        const newItem = { id: nextId('eqp'), stationId, name, category, runningMode, tier, sortOrder: maxOrder+1, createdAt: new Date().toISOString() };
         DB.equipment.push(newItem);
         DB.nameplates[newItem.id] = {};
         logActivity('added', 'Equipment', name, '#/equipment/'+encodeURIComponent(newItem.id));
@@ -2039,7 +2060,7 @@ function openEquipmentModal(stationId, equipmentId){
       await saveDb();
       closeModal();
       toast(item?'Equipment updated.':'Equipment added.', 'success');
-      renderStationPage(stationId);
+      renderStationEquipmentTab(stationId, tier);
     } catch(e){ errBox.innerHTML = '<div class="form-error">'+escapeHtml(e.message)+'</div>'; }
   });
 }
@@ -2049,7 +2070,7 @@ function openEquipmentModal(stationId, equipmentId){
    are copied. Vibration records, drawings, station drawings, breakdown history, images, and any
    other operational/maintenance data are never copied — the new equipment starts fresh, exactly
    like any other newly created equipment. ---- */
-function openCopyEquipmentModal(targetStationId){
+function openCopyEquipmentModal(targetStationId, activeTier){
   const allEquipment = DB.equipment.slice().sort((a,b)=>a.name.localeCompare(b.name));
   openModal(
     'Copy Equipment — Select Source',
@@ -2078,7 +2099,7 @@ function openCopyEquipmentModal(targetStationId){
         + '<button class="btn btn-outline btn-sm" data-copy-select="'+e.id+'">Select</button></div>';
     }).join('');
     listEl.querySelectorAll('[data-copy-select]').forEach(btn=>{
-      btn.addEventListener('click', ()=>openCopyEquipmentConfirmModal(targetStationId, btn.dataset.copySelect));
+      btn.addEventListener('click', ()=>openCopyEquipmentConfirmModal(targetStationId, btn.dataset.copySelect, activeTier));
     });
   }
 
@@ -2086,7 +2107,7 @@ function openCopyEquipmentModal(targetStationId){
   renderList('');
 }
 
-function openCopyEquipmentConfirmModal(targetStationId, sourceId){
+function openCopyEquipmentConfirmModal(targetStationId, sourceId, activeTier){
   const source = DB.equipment.find(e=>e.id===sourceId);
   if(!source){ toast('Source equipment not found.', 'error'); return; }
   const sourceNameplate = DB.nameplates[sourceId] || {};
@@ -2094,7 +2115,7 @@ function openCopyEquipmentConfirmModal(targetStationId, sourceId){
   openModal(
     'Copy Equipment — Confirm Details',
     '<div id="modal-form-error"></div>'
-    + '<div class="helper-text" style="margin-bottom:10px;">Copying Nameplate Specs from <strong>'+escapeHtml(source.name)+'</strong>. Vibration records, drawings, station drawings, breakdown history, and images are never copied — this new equipment starts with a clean history.</div>'
+    + '<div class="helper-text" style="margin-bottom:10px;">Copying Nameplate Specs from <strong>'+escapeHtml(source.name)+'</strong> (Tier: '+escapeHtml(source.tier||'Main')+'). Vibration records, drawings, station drawings, breakdown history, and images are never copied — this new equipment starts with a clean history.</div>'
     + '<div class="field"><label>Equipment Name (for the new equipment)</label><input type="text" id="copy-new-name" value="'+escapeHtml(source.name)+'"></div>'
     + '<div class="field"><label>Equipment ID / Serial No.</label><input type="text" id="copy-new-serial" placeholder="Enter a new, unique ID (leave blank if not known yet)"></div>'
     + '<div class="field"><label>Shop Reference No.</label><input type="text" id="copy-new-shopref" placeholder="Enter a new, unique reference (leave blank if not known yet)"></div>'
@@ -2102,7 +2123,7 @@ function openCopyEquipmentConfirmModal(targetStationId, sourceId){
     '<button class="btn btn-outline" id="modal-back-btn">&larr; Back</button><button class="btn btn-primary" id="modal-save-btn">Create Copy</button>'
   );
   document.querySelector('#modal-overlay .modal').style.maxWidth = '520px';
-  document.getElementById('modal-back-btn').addEventListener('click', ()=>openCopyEquipmentModal(targetStationId));
+  document.getElementById('modal-back-btn').addEventListener('click', ()=>openCopyEquipmentModal(targetStationId, activeTier));
   document.getElementById('modal-save-btn').addEventListener('click', async ()=>{
     const name = document.getElementById('copy-new-name').value.trim();
     const errBox = document.getElementById('modal-form-error');
@@ -2110,7 +2131,8 @@ function openCopyEquipmentConfirmModal(targetStationId, sourceId){
     try {
       const siblings = DB.equipment.filter(e=>e.stationId===targetStationId);
       const maxOrder = siblings.reduce((m,e)=>Math.max(m,e.sortOrder),-1);
-      const newItem = { id: nextId('eqp'), stationId: targetStationId, name, category: source.category || 'Other', runningMode: source.runningMode || 'DOL Scheme', sortOrder: maxOrder+1, createdAt: new Date().toISOString() };
+      const newTier = source.tier || 'Main';
+      const newItem = { id: nextId('eqp'), stationId: targetStationId, name, category: source.category || 'Other', runningMode: source.runningMode || 'DOL Scheme', tier: newTier, sortOrder: maxOrder+1, createdAt: new Date().toISOString() };
       DB.equipment.push(newItem);
       // Shallow-copy every Nameplate Spec field from the source (Make, Rating, Equipment Type,
       // Bearing DE/NDE, etc.), then overwrite just the unique-identifier fields with fresh values.
@@ -2121,7 +2143,7 @@ function openCopyEquipmentConfirmModal(targetStationId, sourceId){
       await saveDb();
       closeModal();
       toast('Equipment copied. Vibration records, drawings, and breakdown history were not copied.', 'success');
-      renderStationEquipmentTab(targetStationId);
+      renderStationEquipmentTab(targetStationId, newTier);
     } catch(e){ errBox.innerHTML = '<div class="form-error">'+escapeHtml(e.message)+'</div>'; }
   });
 }
