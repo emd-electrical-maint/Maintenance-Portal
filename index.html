@@ -458,6 +458,22 @@ const PM_CHECKLIST_ITEMS = [
   "Motor starts and runs smoothly with no abnormal heating or vibration",
   "Overall motor, starter/VFD panel and associated equipment in satisfactory condition"
 ];
+const PM_ACTION_ITEMS = [
+  "Motor terminal box (TB) terminations checked and tightened",
+  "Cable lugs and terminals inspected for overheating, discoloration, corrosion, or looseness",
+  "Motor foundation bolts checked and tightened",
+  "Earthing connection inspected and found healthy with proper tightening",
+  "Visual inspection carried out for oil leakage, moisture ingress, cracks, rust, and any abnormal condition",
+  "Drive panel interior cleaned by blowing/vacuum cleaning to remove accumulated dust",
+  "Incoming, outgoing, and control terminal connections checked and tightened"
+];
+const PM_ACTION_STATUS_OPTIONS = ['DONE','NOTDONE','NA'];
+const PM_ACTION_STATUS_LABELS = { DONE:'Done', NOTDONE:'Not Done', NA:'N/A' };
+const MEGGER_PAIRS = [
+  { key:'RE', label:'R-E' }, { key:'YE', label:'Y-E' }, { key:'BE', label:'B-E' },
+  { key:'RY', label:'R-Y' }, { key:'YB', label:'Y-B' }, { key:'BR', label:'B-R' }
+];
+const MEGGER_UNITS = ['k\u03a9','M\u03a9','G\u03a9'];
 const PM_PHOTO_SLOTS = [
   { key: 'motorTB', label: 'Motor Terminal Box' },
   { key: 'mccPanel', label: 'Motor MCC Panel' },
@@ -465,7 +481,7 @@ const PM_PHOTO_SLOTS = [
 ];
 const BREAKDOWN_PROBLEM_OPTIONS = ['Equipment not starting','Equipment tripped','Overheating','High vibration','Abnormal Sound/Bearing noise','Burning smell','Fire','High current','Other'];
 const BREAKDOWN_CATEGORY_OPTIONS = ['Electrical','Mechanical','Instrumentation','VFD','Process'];
-const BREAKDOWN_CONTRIBUTING_FACTORS = ['Loose cable/connection','Loose terminal','Limit Switches/Sensors/Contacts','Overload','Mechanical jamming','Bearing failure','Insulation failure','Cooling failure','Moisture ingress','VFD fault','Contactor/MCCB failure','Human error','Other'];
+const BREAKDOWN_CONTRIBUTING_FACTORS = ['Loose cable/connection','Loose terminal','Limit Switches/Sensors/Contacts','Overload','Single Phasing','Mechanical jamming','Bearing failure','Insulation failure','Cooling failure','Moisture ingress','VFD fault','Contactor/MCCB failure','Human error','Other'];
 const BREAKDOWN_PHOTO_SLOTS = [
   { key: 'photo1', label: 'Photograph 1' },
   { key: 'photo2', label: 'Photograph 2' },
@@ -2482,79 +2498,114 @@ function openVfdReactivateModal(equipmentId, archived){
    so guidance and troubleshooting cover the drive too, not just
    the motor.
    ============================================================ */
+let pmChatHistory = {}; // keyed by equipmentId; intentionally NOT persisted anywhere -- fresh every visit to this page
+
 function renderPmGuidanceSection(equipmentId){
   const container = document.getElementById('pm-guidance-container');
   if(!container) return;
   if(!isAdmin() || !CONFIG.AI_PROXY_URL){ container.innerHTML=''; return; }
-  const equipmentItem = DB.equipment.find(e=>e.id===equipmentId);
-  const np = DB.nameplates[equipmentId] || {};
-  const hasVfd = equipmentItem && equipmentItem.runningMode==='VFD Scheme';
+  pmChatHistory[equipmentId] = []; // fresh conversation every time this tab renders, as intended
 
   container.innerHTML =
-    '<div class="spec-sheet" style="margin-top:16px;"><div class="spec-sheet-header"><span>General Maintenance Guidance (Web-Sourced)</span>'
-    + '<button class="btn btn-ghost-light btn-sm" id="pm-guidance-btn">Get General PM Guidance</button></div>'
+    '<div class="spec-sheet" style="margin-top:16px;"><div class="spec-sheet-header"><span>Equipment Assistant (AI)</span></div>'
     + '<div style="padding:16px;">'
-    + '<p class="helper-text" style="margin:0;">Uses this equipment\u2019s Make and Rating'+(hasVfd?' and its active VFD details':'')+' to search the web for general preventive maintenance and troubleshooting guidance. This is <strong>not</strong> based on your own logged data.</p>'
-    + '<div id="pm-guidance-result"></div>'
-    + '</div></div>';
+    + '<p class="helper-text" style="margin:0;">Combines this equipment\u2019s own history with general public information \u2014 always verify anything specific against the manufacturer\u2019s manual. Ask about PM tasks, likely causes, or what to check next, for this equipment'+((DB.equipment.find(e=>e.id===equipmentId)||{}).runningMode==='VFD Scheme'?' and its active VFD':'')+'.</p>'
+    + '<div id="pm-chat-messages" style="margin:12px 0; max-height:380px; overflow-y:auto;"></div>'
+    + '<div style="display:flex; gap:8px;">'
+    + '<input type="text" id="pm-chat-input" placeholder="e.g. What should I check given the recent breakdown history?" autocomplete="off" style="flex:1; font-family:inherit; font-size:14px; padding:8px 10px; border:1px solid var(--color-border-strong); border-radius:var(--radius);">'
+    + '<button class="btn btn-primary btn-sm" id="pm-chat-send-btn">Send</button>'
+    + '</div></div></div>';
 
-  document.getElementById('pm-guidance-btn').addEventListener('click', ()=>runGeneralPmGuidance(equipmentId));
+  renderPmChatMessages(equipmentId);
+  const input = document.getElementById('pm-chat-input');
+  document.getElementById('pm-chat-send-btn').addEventListener('click', ()=>sendPmChatMessage(equipmentId));
+  input.addEventListener('keydown', (e)=>{ if(e.key==='Enter') sendPmChatMessage(equipmentId); });
 }
 
-async function runGeneralPmGuidance(equipmentId){
-  const resultEl = document.getElementById('pm-guidance-result');
-  if(!resultEl) return;
-  const equipmentItem = DB.equipment.find(e=>e.id===equipmentId);
+function gatherEquipmentContextForChat(equipmentId){
+  const eq = DB.equipment.find(e=>e.id===equipmentId);
   const np = DB.nameplates[equipmentId] || {};
-  if(!np.make && !equipmentItem.category){
-    resultEl.innerHTML = '<div class="form-error" style="margin-top:12px;">Add at least a Make in Nameplate Specs before requesting guidance.</div>';
+  const activeVfd = (eq && eq.runningMode==='VFD Scheme' && np.vfdHistory) ? np.vfdHistory.find(v=>!v.endDate) : null;
+  const recentPM = DB.pmRecords.filter(p=>p.equipmentId===equipmentId)
+    .sort((a,b)=>(b.date||'').localeCompare(a.date||'')).slice(0,10)
+    .map(p=>({ date:p.date, notOkItems:(p.checklist||[]).filter(c=>c.status==='NOTOK').map(c=>c.item), finalRemarks:p.finalRemarks||'' }));
+  const recentBreakdowns = DB.breakdownHistory.filter(b=>b.formType==='v2' && b.equipmentId===equipmentId)
+    .sort((a,b)=>(b.breakdownDate||'').localeCompare(a.breakdownDate||'')).slice(0,10)
+    .map(b=>({ date:b.breakdownDate, problem:b.problem==='Other'?(b.problemOther||'Other'):b.problem, rootCause:b.rootCause||'', correctiveAction:b.correctiveAction||'', repeatBreakdown:b.repeatBreakdown||'' }));
+  const recentVibration = DB.vibrationRecords.filter(v=>v.equipmentId===equipmentId)
+    .sort((a,b)=>(b.date||'').localeCompare(a.date||'')).slice(0,5)
+    .map(v=>({ date:v.date, remarks:v.remarks||'' }));
+  return {
+    name: eq?eq.name:'', category: eq?eq.category||'':'', equipmentType: np.equipmentType||'',
+    make: np.make||'', ratingKW: np.ratingKW||'', ratingHP: np.ratingHP||'',
+    activeVfd: activeVfd ? { make:activeVfd.make||'', model:activeVfd.model||'', rating:activeVfd.rating||'', serialNo:activeVfd.serialNo||'' } : null,
+    recentPM, recentBreakdowns, recentVibration
+  };
+}
+
+function renderPmChatMessages(equipmentId){
+  const messagesEl = document.getElementById('pm-chat-messages');
+  if(!messagesEl) return;
+  const history = pmChatHistory[equipmentId] || [];
+  if(history.length===0){
+    messagesEl.innerHTML = '<div class="helper-text">Ask a question below to start.</div>';
     return;
   }
-  if(!accessToken){ resultEl.innerHTML = '<div class="form-error" style="margin-top:12px;">Please sign in again to use this feature.</div>'; return; }
+  messagesEl.innerHTML = history.map(turn=>{
+    if(turn.role==='user'){
+      return '<div style="margin-bottom:10px;"><div class="spec-label" style="margin-bottom:2px;">You</div><div style="font-size:14px;">'+escapeHtml(turn.text)+'</div></div>';
+    }
+    const sources = (turn.sources||[]).map(s=>
+      '<a href="'+escapeHtml(s.uri)+'" target="_blank" rel="noopener" style="display:block; font-size:12px; color:var(--color-panel); text-decoration:underline; margin-top:3px;">'+escapeHtml(s.title||s.uri)+'</a>'
+    ).join('');
+    return '<div style="margin-bottom:14px; padding-bottom:14px; border-bottom:1px solid var(--color-border);">'
+      + '<div class="spec-label" style="margin-bottom:2px;">Assistant</div>'
+      + '<div style="font-size:14px; white-space:pre-wrap; line-height:1.6;'+(turn.isError?' color:var(--color-danger);':'')+'">'+escapeHtml(turn.text)+'</div>'
+      + (sources ? '<div style="margin-top:8px;"><div class="spec-label" style="margin-bottom:3px;">Sources</div>'+sources+'</div>' : '')
+      + '</div>';
+  }).join('');
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
 
-  const activeVfd = (equipmentItem.runningMode==='VFD Scheme' && np.vfdHistory) ? np.vfdHistory.find(v=>!v.endDate) : null;
-  resultEl.innerHTML = '<div class="helper-text" style="margin-top:12px;">Searching\u2026</div>';
+async function sendPmChatMessage(equipmentId){
+  const input = document.getElementById('pm-chat-input');
+  const sendBtn = document.getElementById('pm-chat-send-btn');
+  if(!input) return;
+  const question = input.value.trim();
+  if(!question) return;
+  if(!accessToken){
+    pmChatHistory[equipmentId] = pmChatHistory[equipmentId] || [];
+    pmChatHistory[equipmentId].push({ role:'assistant', text:'Please sign in again to use this feature.', isError:true });
+    renderPmChatMessages(equipmentId);
+    return;
+  }
+  pmChatHistory[equipmentId] = pmChatHistory[equipmentId] || [];
+  const historyBeforeThisTurn = pmChatHistory[equipmentId].slice();
+  pmChatHistory[equipmentId].push({ role:'user', text:question });
+  input.value = '';
+  input.disabled = true; sendBtn.disabled = true; sendBtn.textContent = 'Thinking\u2026';
+  renderPmChatMessages(equipmentId);
   try {
-    const payload = {
-      accessToken,
-      mode: 'generalGuidance',
-      equipment: {
-        category: equipmentItem.category||'',
-        equipmentType: np.equipmentType||'',
-        make: np.make||'',
-        ratingKW: np.ratingKW||'',
-        ratingHP: np.ratingHP||'',
-        activeVfd: activeVfd ? { make:activeVfd.make||'', model:activeVfd.model||'', rating:activeVfd.rating||'', serialNo:activeVfd.serialNo||'' } : null
-      }
-    };
+    const equipmentContext = gatherEquipmentContextForChat(equipmentId);
     const res = await fetch(CONFIG.AI_PROXY_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // avoids a CORS preflight, which Apps Script web apps don't handle
-      body: JSON.stringify(payload)
+      body: JSON.stringify({
+        accessToken, mode: 'generalGuidance',
+        equipment: equipmentContext,
+        history: historyBeforeThisTurn.map(t=>({ role: t.role, text: t.text })),
+        question
+      })
     });
     const json = await res.json();
-    renderPmGuidanceAnswer(json);
+    if(json.error){ pmChatHistory[equipmentId].push({ role:'assistant', text:json.error, isError:true }); }
+    else { pmChatHistory[equipmentId].push({ role:'assistant', text:json.answer||'No answer returned.', sources:json.sources||[] }); }
   } catch(e){
-    resultEl.innerHTML = '<div class="form-error" style="margin-top:12px;">Could not reach AI service: '+escapeHtml(e.message)+'</div>';
+    pmChatHistory[equipmentId].push({ role:'assistant', text:'Could not reach AI service: '+e.message, isError:true });
   }
-}
-
-function renderPmGuidanceAnswer(json){
-  const resultEl = document.getElementById('pm-guidance-result');
-  if(!resultEl) return;
-  if(json.error){
-    resultEl.innerHTML = '<div class="form-error" style="margin-top:12px;">'+escapeHtml(json.error)+'</div>';
-    return;
-  }
-  const sources = (json.sources||[]).map(s=>
-    '<a href="'+escapeHtml(s.uri)+'" target="_blank" rel="noopener" style="display:block; font-size:12.5px; color:var(--color-panel); text-decoration:underline; margin-top:4px;">'+escapeHtml(s.title||s.uri)+'</a>'
-  ).join('');
-  resultEl.innerHTML =
-    '<div style="margin-top:14px; padding-top:14px; border-top:1px solid var(--color-border);">'
-    + '<div style="white-space:pre-wrap; line-height:1.6;">'+escapeHtml(json.answer||'No answer returned.')+'</div>'
-    + (sources ? '<div style="margin-top:12px;"><div class="spec-label" style="margin-bottom:4px;">Sources</div>'+sources+'</div>' : '')
-    + '<div class="helper-text" style="margin-top:14px; padding-top:12px; border-top:1px solid var(--color-border);">General guidance based on public information \u2014 always verify against the manufacturer\u2019s official manual before performing maintenance.</div>'
-    + '</div>';
+  input.disabled = false; sendBtn.disabled = false; sendBtn.textContent = 'Send';
+  renderPmChatMessages(equipmentId);
+  input.focus();
 }
 
 
@@ -4863,6 +4914,7 @@ function renderBreakdown(equipmentId, highlightRecordId){
       + '<div class="spec-grid">'
       + '<div class="spec-cell notes-cell"><div class="spec-label">Immediate Cause</div><div class="spec-value '+(r.immediateCause?'':'empty')+'" style="font-family:var(--font-body); font-weight:400;">'+(r.immediateCause?escapeHtml(r.immediateCause):'\u2014')+'</div></div>'
       + '<div class="spec-cell notes-cell"><div class="spec-label">Root Cause</div><div class="spec-value '+(r.rootCause?'':'empty')+'" style="font-family:var(--font-body); font-weight:400;">'+(r.rootCause?escapeHtml(r.rootCause):'\u2014')+'</div></div>'
+      + meggerDisplayHtml(r.megger)
       + '<div class="spec-cell notes-cell"><div class="spec-label">Contributing Factors</div><div class="spec-value '+(factors.length?'':'empty')+'" style="font-family:var(--font-body); font-weight:400;">'+(factors.length?escapeHtml(factors.join(', ')):'\u2014')+'</div></div>'
       + '<div class="spec-cell notes-cell"><div class="spec-label">Corrective Action Taken</div><div class="spec-value '+(r.correctiveAction?'':'empty')+'" style="font-family:var(--font-body); font-weight:400;">'+(r.correctiveAction?escapeHtml(r.correctiveAction):'\u2014')+'</div></div>'
       + (parts.length ? '<div class="spec-cell notes-cell"><div class="spec-label">Parts Replaced</div><table class="data-table" style="border:none; border-radius:0; box-shadow:none;"><thead><tr><th>Item</th><th>Qty</th></tr></thead><tbody>'+parts.map(p=>'<tr><td>'+escapeHtml(p.item)+'</td><td class="mono">'+escapeHtml(p.qty||'')+'</td></tr>').join('')+'</tbody></table></div>' : '')
@@ -5022,6 +5074,53 @@ async function deleteBreakdown(id, equipmentId){
    new entries always use this richer form, legacy entries keep
    displaying/editing exactly as before via openBreakdownModal.
    ============================================================ */
+function meggerFormHtml(existing){
+  const m = existing || {};
+  const rows = MEGGER_PAIRS.map(p=>{
+    const val = (m[p.key] && m[p.key].value) || '';
+    const unit = (m[p.key] && m[p.key].unit) || 'M\u03a9';
+    return '<tr><td class="mono" style="font-weight:600;">'+p.label+'</td>'
+      + '<td><input type="text" class="megger-value-input" data-megger-key="'+p.key+'" value="'+escapeHtml(val)+'" style="width:100%;"></td>'
+      + '<td><select class="megger-unit-input" data-megger-key="'+p.key+'">'+MEGGER_UNITS.map(u=>'<option value="'+u+'" '+(unit===u?'selected':'')+'>'+u+'</option>').join('')+'</select></td></tr>';
+  }).join('');
+  return '<details style="margin-top:4px; margin-bottom:14px;"><summary style="cursor:pointer; padding:8px 0; font-weight:600; font-size:13px;">Enter Megger Reading (optional)</summary>'
+    + '<table class="data-table" style="border:none; box-shadow:none; margin-top:8px;"><thead><tr><th>Pair</th><th>Value</th><th>Unit</th></tr></thead><tbody>'+rows+'</tbody></table>'
+    + '<div class="field" style="margin-top:8px;"><label>Megger Remarks</label><textarea class="megger-remarks-input">'+escapeHtml(m.remarks||'')+'</textarea></div>'
+    + '</details>';
+}
+
+function readMeggerForm(container){
+  const megger = {};
+  let hasAny = false;
+  MEGGER_PAIRS.forEach(p=>{
+    const valEl = container.querySelector('.megger-value-input[data-megger-key="'+p.key+'"]');
+    const unitEl = container.querySelector('.megger-unit-input[data-megger-key="'+p.key+'"]');
+    const value = valEl ? valEl.value.trim() : '';
+    const unit = unitEl ? unitEl.value : 'M\u03a9';
+    if(value) hasAny = true;
+    megger[p.key] = { value, unit };
+  });
+  const remarksEl = container.querySelector('.megger-remarks-input');
+  const remarks = remarksEl ? remarksEl.value.trim() : '';
+  if(remarks) hasAny = true;
+  megger.remarks = remarks;
+  return hasAny ? megger : null;
+}
+
+function meggerDisplayHtml(megger){
+  if(!megger) return '';
+  const rows = MEGGER_PAIRS.map(p=>{
+    const entry = megger[p.key];
+    if(!entry || !entry.value) return '';
+    return '<tr><td class="mono" style="font-weight:600;">'+p.label+'</td><td class="mono">'+escapeHtml(entry.value)+' '+escapeHtml(entry.unit||'')+'</td></tr>';
+  }).filter(Boolean).join('');
+  if(!rows && !megger.remarks) return '';
+  return '<div class="spec-cell notes-cell"><div class="spec-label">Megger Reading</div>'
+    + (rows ? '<table class="data-table" style="border:none; box-shadow:none; max-width:280px;"><tbody>'+rows+'</tbody></table>' : '')
+    + (megger.remarks ? '<div class="spec-value" style="font-family:var(--font-body); font-weight:400; margin-top:6px;">'+escapeHtml(megger.remarks)+'</div>' : '')
+    + '</div>';
+}
+
 function openBreakdownModalV2(equipmentId, record){
   const teamMembers = getAllTeamMembers();
   const selectedTeam = (record && record.team) || [];
@@ -5065,6 +5164,7 @@ function openBreakdownModalV2(equipmentId, record){
     + yesNoField('bdf-repeat','Repeat Breakdown?', record?record.repeatBreakdown:'')
     + '<div class="field"><label>Immediate Cause</label><textarea id="bdf-immediate-cause">'+escapeHtml(record?record.immediateCause||'':'')+'</textarea></div>'
     + '<div class="field"><label>Root Cause</label><textarea id="bdf-root-cause">'+escapeHtml(record?record.rootCause||'':'')+'</textarea></div>'
+    + meggerFormHtml(record?record.megger:null)
     + '<div class="field"><label>Contributing Factors (if any)</label><div style="max-height:160px; overflow-y:auto; border:1px solid var(--color-border); border-radius:6px; padding:8px 12px;">'+factorsCheckboxes+'</div></div>'
     + '<div class="field" id="bdf-factors-other-field" style="display:'+(selectedFactors.includes('Other')?'flex':'none')+';"><label>Contributing Factors &mdash; Other</label><input type="text" id="bdf-factors-other" value="'+escapeHtml(record?record.contributingFactorsOther||'':'')+'"></div>'
     + '<div class="field"><label>Corrective Action Taken</label><textarea id="bdf-corrective-action">'+escapeHtml(record?record.correctiveAction||'':'')+'</textarea></div>'
@@ -5147,6 +5247,7 @@ function openBreakdownModalV2(equipmentId, record){
         repeatBreakdown: document.getElementById('bdf-repeat').value,
         immediateCause: document.getElementById('bdf-immediate-cause').value.trim(),
         rootCause: document.getElementById('bdf-root-cause').value.trim(),
+        megger: readMeggerForm(document.querySelector('#modal-overlay .modal')),
         contributingFactors,
         contributingFactorsOther: document.getElementById('bdf-factors-other').value.trim(),
         correctiveAction: document.getElementById('bdf-corrective-action').value.trim(),
@@ -5251,6 +5352,13 @@ async function buildBreakdownV2ReportPdf(record, equipmentId){
   y += 16;
   section('Immediate Cause:', record.immediateCause);
   section('Root Cause:', record.rootCause);
+  if(record.megger){
+    MEGGER_PAIRS.forEach(p=>{
+      const entry = record.megger[p.key];
+      if(entry && entry.value) section('Megger '+p.label+':', entry.value+' '+(entry.unit||''));
+    });
+    if(record.megger.remarks) section('Megger Remarks:', record.megger.remarks);
+  }
   section('Contributing Factors:', factors.join(', '));
   y += 6;
 
@@ -5364,6 +5472,13 @@ function renderPMTab(equipmentId, highlightRecordId){
     const sparesRows = (r.spares||[]).filter(s=>s.name).map(s=>
       '<tr><td>'+escapeHtml(s.name)+'</td><td class="mono">'+escapeHtml(s.qty||'')+'</td></tr>'
     ).join('');
+    const actions = r.actions || [];
+    const actionsDoneCount = actions.filter(a=>a.status==='DONE').length;
+    const actionRows = actions.map((a,i)=>
+      '<tr><td class="mono">'+(i+1)+'</td><td>'+escapeHtml(a.item)+'</td>'
+      + '<td class="mono">'+PM_ACTION_STATUS_LABELS[a.status||'NOTDONE']+'</td>'
+      + '<td>'+(a.remarks?escapeHtml(a.remarks):'<span class="muted">&mdash;</span>')+'</td></tr>'
+    ).join('');
     const photoThumbs = PM_PHOTO_SLOTS.map(slot=>{
       const p = r.photos && r.photos[slot.key];
       if(!p || !p.fileId) return '';
@@ -5385,6 +5500,10 @@ function renderPMTab(equipmentId, highlightRecordId){
       + '<details style="padding:0 16px 12px;"><summary style="cursor:pointer; padding:8px 0; font-weight:600; font-size:13px;">View full checklist</summary>'
       + '<table class="data-table" style="border:none; border-radius:0; box-shadow:none;">'
       + '<thead><tr><th>S.No</th><th>Inspection Item</th><th>Status</th><th>Remarks</th></tr></thead><tbody>'+checklistRows+'</tbody></table></details>'
+      + (actions.length ? '<details style="padding:0 16px 12px;"><summary style="cursor:pointer; padding:8px 0; font-weight:600; font-size:13px;">View actions performed ('+actionsDoneCount+'/'+actions.length+' done)</summary>'
+        + '<table class="data-table" style="border:none; border-radius:0; box-shadow:none;">'
+        + '<thead><tr><th>S.No</th><th>Task</th><th>Status</th><th>Remarks</th></tr></thead><tbody>'+actionRows+'</tbody></table></details>' : '')
+      + (r.megger ? '<div style="padding:0 16px 12px;">'+meggerDisplayHtml(r.megger)+'</div>' : '')
       + (sparesRows ? '<div class="spec-cell notes-cell" style="padding:0 16px 12px;"><div class="spec-label">Spares Consumed</div><table class="data-table" style="border:none; border-radius:0; box-shadow:none;"><thead><tr><th>Spare</th><th>Quantity</th></tr></thead><tbody>'+sparesRows+'</tbody></table></div>' : '')
       + '<div class="spec-cell notes-cell" style="padding:0 16px 12px;"><div class="spec-label">Final Remarks</div><div class="spec-value '+(r.finalRemarks?'':'empty')+'" style="font-family:var(--font-body); font-weight:400;">'+(r.finalRemarks?escapeHtml(r.finalRemarks):'No remarks entered')+'</div></div>'
       + (photoThumbs ? '<div style="display:flex; gap:16px; padding:0 16px 16px;">'+photoThumbs+'</div>' : '')
@@ -5433,6 +5552,9 @@ function openPMModal(equipmentId, record){
     ? record.checklist
     : PM_CHECKLIST_ITEMS.map(item=>({ item, status:'OK', remarks:'' }));
   const spares = (record && record.spares && record.spares.length) ? record.spares : [{name:'',qty:''}];
+  const actions = (record && record.actions && record.actions.length===PM_ACTION_ITEMS.length)
+    ? record.actions
+    : PM_ACTION_ITEMS.map(item=>({ item, status:'NOTDONE', remarks:'' }));
 
   const teamCheckboxes = teamMembers.length
     ? teamMembers.map(name=>'<label style="display:flex; align-items:center; gap:6px; font-weight:400; padding:3px 0;"><input type="checkbox" class="pm-team-cb" value="'+escapeHtml(name)+'" '+(selectedTeam.includes(name)?'checked':'')+'> '+escapeHtml(name)+'</label>').join('')
@@ -5453,6 +5575,15 @@ function openPMModal(equipmentId, record){
     + '<td><button type="button" class="btn btn-outline btn-sm" data-remove-spare-row="'+i+'">&times;</button></td></tr>'
   ).join('');
 
+  const actionRows = actions.map((a,i)=>
+    '<tr data-pm-action-row="'+i+'">'
+    + '<td class="mono">'+(i+1)+'</td>'
+    + '<td style="max-width:260px;">'+escapeHtml(a.item)+'</td>'
+    + PM_ACTION_STATUS_OPTIONS.map(opt=>'<td style="text-align:center;"><input type="radio" name="pm-action-status-'+i+'" value="'+opt+'" '+((a.status||'NOTDONE')===opt?'checked':'')+'></td>').join('')
+    + '<td><input type="text" data-pm-action-remarks="'+i+'" value="'+escapeHtml(a.remarks||'')+'" style="width:100%;"></td>'
+    + '</tr>'
+  ).join('');
+
   const photoFieldsHtml = PM_PHOTO_SLOTS.map(slot=>{
     const existing = record && record.photos && record.photos[slot.key];
     return '<div class="field"><label>'+slot.label+' (optional &mdash; JPG, JPEG, PNG)</label>'
@@ -5467,6 +5598,8 @@ function openPMModal(equipmentId, record){
     + '<div class="field"><label>Time</label><input type="time" id="pmf-time" value="'+(record?record.time||'':'')+'"></div></div>'
     + '<div class="field"><label>Team Assigned</label><div style="max-height:140px; overflow-y:auto; border:1px solid var(--color-border); border-radius:6px; padding:8px 12px;">'+teamCheckboxes+'</div></div>'
     + '<div class="field"><label>Preventive Maintenance Checklist</label><table class="data-table"><thead><tr><th>S.No</th><th>Inspection Item</th><th>OK</th><th>Not OK</th><th>N/A</th><th>Remarks</th></tr></thead><tbody id="pm-checklist-body">'+checklistRows+'</tbody></table></div>'
+    + '<div class="field"><label>Actions Performed</label><table class="data-table"><thead><tr><th>S.No</th><th>Task</th><th>Done</th><th>Not Done</th><th>N/A</th><th>Remarks</th></tr></thead><tbody id="pm-actions-body">'+actionRows+'</tbody></table></div>'
+    + meggerFormHtml(record?record.megger:null)
     + '<div class="field"><label>Spares Consumed (optional)</label><table class="data-table"><thead><tr><th>Spare Name</th><th>Quantity</th><th></th></tr></thead><tbody id="pm-spares-body">'+sparesRowsHtml+'</tbody></table>'
     + '<button type="button" class="btn btn-outline btn-sm" id="pm-add-spare-btn" style="margin-top:8px;">+ Add spare</button></div>'
     + photoFieldsHtml
@@ -5499,6 +5632,12 @@ function openPMModal(equipmentId, record){
       const remarksEl = document.querySelector('[data-pm-remarks="'+i+'"]');
       return { item, status: checkedRadio?checkedRadio.value:'OK', remarks: remarksEl?remarksEl.value.trim():'' };
     });
+    const newActions = PM_ACTION_ITEMS.map((item,i)=>{
+      const checkedRadio = document.querySelector('input[name="pm-action-status-'+i+'"]:checked');
+      const remarksEl = document.querySelector('[data-pm-action-remarks="'+i+'"]');
+      return { item, status: checkedRadio?checkedRadio.value:'NOTDONE', remarks: remarksEl?remarksEl.value.trim():'' };
+    });
+    const megger = readMeggerForm(document.querySelector('#modal-overlay .modal'));
     const newSpares = Array.from(document.querySelectorAll('#pm-spares-body tr')).map(row=>({
       name: row.querySelector('.pm-spare-name').value.trim(),
       qty: row.querySelector('.pm-spare-qty').value.trim()
@@ -5529,7 +5668,7 @@ function openPMModal(equipmentId, record){
           photos[slot.key] = null;
         }
       }
-      const fields = { date, time, team, checklist: newChecklist, spares: newSpares, finalRemarks, photos };
+      const fields = { date, time, team, checklist: newChecklist, actions: newActions, megger, spares: newSpares, finalRemarks, photos };
       let newRecord = null, backup = null;
       const eqForLog = DB.equipment.find(e=>e.id===equipmentId);
       let logEntry = null;
@@ -5822,6 +5961,50 @@ async function buildPMReportPdf(record, equipmentId){
     y += rowH;
   });
   y += 14;
+
+  // Actions performed
+  if((record.actions||[]).length){
+    ensureSpace(24);
+    doc.setFont('helvetica','bold'); doc.setFontSize(12);
+    doc.text('Actions Performed', margin, y);
+    y += 16;
+    drawChecklistHeader();
+    doc.setFont('helvetica','normal'); doc.setFontSize(9);
+    record.actions.forEach((a,i)=>{
+      const itemLines = doc.splitTextToSize(a.item, 260);
+      const remarksLines = a.remarks ? doc.splitTextToSize(a.remarks, 195) : ['\u2014'];
+      const rowH = Math.max(itemLines.length, remarksLines.length) * 11 + 4;
+      ensureSpace(rowH+4);
+      doc.text(String(i+1), colX.sno, y);
+      doc.text(itemLines, colX.item, y);
+      doc.text(PM_ACTION_STATUS_LABELS[a.status||'NOTDONE'], colX.status, y);
+      doc.text(remarksLines, colX.remarks, y);
+      y += rowH;
+    });
+    y += 14;
+  }
+
+  // Megger reading
+  if(record.megger){
+    ensureSpace(24);
+    doc.setFont('helvetica','bold'); doc.setFontSize(12);
+    doc.text('Megger Reading', margin, y);
+    y += 16;
+    doc.setFont('helvetica','normal'); doc.setFontSize(10);
+    MEGGER_PAIRS.forEach(p=>{
+      const entry = record.megger[p.key];
+      if(!entry || !entry.value) return;
+      ensureSpace(14);
+      doc.text(p.label+': '+entry.value+' '+(entry.unit||''), margin, y);
+      y += 14;
+    });
+    if(record.megger.remarks){
+      const maxWidth = pageW-margin*2;
+      ensureSpace(pdfFieldHeight(doc, maxWidth, record.megger.remarks));
+      y = pdfField(doc, margin, y, maxWidth, 'Megger Remarks:', record.megger.remarks);
+    }
+    y += 8;
+  }
 
   // Spares consumed
   const spares = (record.spares||[]).filter(s=>s.name);
