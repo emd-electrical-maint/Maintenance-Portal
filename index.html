@@ -5107,6 +5107,16 @@ function readMeggerForm(container){
   return hasAny ? megger : null;
 }
 
+function pdfSafeMeggerUnit(unit){
+  // jsPDF's built-in Helvetica font doesn't support the Greek Omega character (renders as a
+  // wrong glyph, e.g. a copyright symbol) -- spell it out as plain text for PDF output only.
+  // The on-screen form/card display keeps the real \u03a9 symbol, since browsers render it fine.
+  if(unit==='k\u03a9') return 'kOhm';
+  if(unit==='M\u03a9') return 'MOhm';
+  if(unit==='G\u03a9') return 'GOhm';
+  return unit || '';
+}
+
 function meggerDisplayHtml(megger){
   if(!megger) return '';
   const rows = MEGGER_PAIRS.map(p=>{
@@ -5355,7 +5365,7 @@ async function buildBreakdownV2ReportPdf(record, equipmentId){
   if(record.megger){
     MEGGER_PAIRS.forEach(p=>{
       const entry = record.megger[p.key];
-      if(entry && entry.value) section('Megger '+p.label+':', entry.value+' '+(entry.unit||''));
+      if(entry && entry.value) section('Megger '+p.label+':', entry.value+' '+pdfSafeMeggerUnit(entry.unit));
     });
     if(record.megger.remarks) section('Megger Remarks:', record.megger.remarks);
   }
@@ -5995,7 +6005,7 @@ async function buildPMReportPdf(record, equipmentId){
       const entry = record.megger[p.key];
       if(!entry || !entry.value) return;
       ensureSpace(14);
-      doc.text(p.label+': '+entry.value+' '+(entry.unit||''), margin, y);
+      doc.text(p.label+': '+entry.value+' '+pdfSafeMeggerUnit(entry.unit), margin, y);
       y += 14;
     });
     if(record.megger.remarks){
