@@ -280,6 +280,48 @@ footer.site-footer { background:linear-gradient(180deg,var(--color-panel) 0%,var
   .station-grid{grid-template-columns:1fr;}
   .ai-search-bar{flex-wrap:wrap; row-gap:10px; border-radius:16px; padding:12px 14px;}
   .ai-search-bar .btn{flex-basis:100%;}
+  .pm-chat-inputrow{flex-wrap:wrap; row-gap:8px;}
+  .pm-chat-inputrow .btn{flex-basis:100%;}
+
+  /* Tabs: horizontal scroll instead of multi-row wrap -- one clean strip, swipe for more */
+  .tabs{flex-wrap:nowrap; overflow-x:auto; -webkit-overflow-scrolling:touch;}
+  .tab-btn{flex-shrink:0;}
+
+  /* Modals: tighter padding, more usable height, buttons that don't get cramped */
+  .modal-overlay{padding:16px 10px;}
+  .modal-body{padding:16px; max-height:72vh;}
+  .modal-footer{padding:12px 16px; flex-wrap:wrap;}
+  .modal-footer .btn{flex:1 1 auto;}
+
+  /* Card action rows (Generate Report / Edit / Delete, Rename / Delete, etc.): wrap and stay tappable */
+  .spec-sheet-header{flex-wrap:wrap; row-gap:8px;}
+  .spec-sheet-header > div{flex-wrap:wrap; width:100%;}
+  .spec-sheet-header > div .btn{flex:1 1 auto;}
+  .card-actions{opacity:1; flex-wrap:wrap;}
+  .equipment-row{flex-wrap:wrap; row-gap:10px;}
+
+  /* Generic wide-table -> stacked card transform. Opt-in only, via .mobile-card-table,
+     so tables not part of this pass (Contracts, Safety Docs, etc.) are untouched. */
+  .mobile-card-table{border:none; box-shadow:none; background:transparent;}
+  .mobile-card-table thead{display:none;}
+  .mobile-card-table tr{display:block; background:var(--color-surface); border:1.5px solid var(--color-border); border-radius:var(--radius-card); box-shadow:var(--shadow-card); padding:10px 14px; margin-bottom:10px;}
+  .mobile-card-table td{display:block; border:none !important; padding:5px 0 !important; background:transparent !important;}
+  .mobile-card-table td[data-mobile-label]::before{content:attr(data-mobile-label); display:block; font-family:var(--font-mono); font-size:10.5px; text-transform:uppercase; letter-spacing:.05em; color:var(--color-text-muted); margin-bottom:1px;}
+
+  /* PM checklist tables (Observations + Actions) get the card treatment above, PLUS this
+     more specific layout: item on its own line, status as a row of tappable pills, remarks below. */
+  .pm-check-table tr{display:flex; flex-wrap:wrap; gap:6px; align-items:stretch;}
+  .pm-check-table td:nth-child(1){display:none;}
+  .pm-check-table td:nth-child(2){flex:1 1 100%; font-weight:600; font-size:13px; padding-bottom:2px !important;}
+  .pm-check-table td:nth-child(3),.pm-check-table td:nth-child(4),.pm-check-table td:nth-child(5){
+    flex:1 1 0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:3px;
+    border:1.5px solid var(--color-border-strong) !important; border-radius:10px; padding:6px 4px !important;
+  }
+  .pm-check-table td:nth-child(3)::before,.pm-check-table td:nth-child(4)::before,.pm-check-table td:nth-child(5)::before{
+    content:attr(data-mobile-label); font-size:9.5px; font-weight:700; text-transform:uppercase; letter-spacing:.03em; color:var(--color-text-muted);
+  }
+  .pm-check-table td:nth-child(6){flex:1 1 100%;}
+  .pm-check-table td:nth-child(6) input{width:100%;}
 }
 @media (hover:none){
   .station-card:hover,.equipment-row:hover,.drawing-card:hover{transform:none;box-shadow:var(--shadow-card);border-color:var(--color-border);background:var(--color-surface);}
@@ -2511,7 +2553,7 @@ function renderPmGuidanceSection(equipmentId){
     + '<div style="padding:16px;">'
     + '<p class="helper-text" style="margin:0;">Combines this equipment\u2019s own history with general public information \u2014 always verify anything specific against the manufacturer\u2019s manual. Ask about PM tasks, likely causes, or what to check next, for this equipment'+((DB.equipment.find(e=>e.id===equipmentId)||{}).runningMode==='VFD Scheme'?' and its active VFD':'')+'.</p>'
     + '<div id="pm-chat-messages" style="margin:12px 0; max-height:380px; overflow-y:auto;"></div>'
-    + '<div style="display:flex; gap:8px;">'
+    + '<div class="pm-chat-inputrow" style="display:flex; gap:8px;">'
     + '<input type="text" id="pm-chat-input" placeholder="e.g. What should I check given the recent breakdown history?" autocomplete="off" style="flex:1; font-family:inherit; font-size:14px; padding:8px 10px; border:1px solid var(--color-border-strong); border-radius:var(--radius);">'
     + '<button class="btn btn-primary btn-sm" id="pm-chat-send-btn">Send</button>'
     + '</div></div></div>';
@@ -2620,8 +2662,8 @@ function renderVibration(equipmentId){
     const readings = r.readings || {};
     const bodyRows = VIB_BEARINGS.map(b=>{
       const row = readings[b] || {};
-      return '<tr><td class="mono" style="font-weight:600;">'+b+'</td>'
-        + VIB_AXES.map(axis=>'<td class="mono">'+escapeHtml(row[axis]||'\u2014')+'</td>').join('')
+      return '<tr><td class="mono" style="font-weight:600;" data-mobile-label="Bearing">'+b+'</td>'
+        + VIB_AXES.map(axis=>'<td class="mono" data-mobile-label="'+axis+' (mm/s)">'+escapeHtml(row[axis]||'\u2014')+'</td>').join('')
         + '</tr>';
     }).join('');
     return '<div class="spec-sheet" style="margin-bottom:16px;">'
@@ -2632,7 +2674,7 @@ function renderVibration(equipmentId){
       + (admin ? '<button class="btn btn-ghost-light btn-sm" data-vib-delete="'+r.id+'">Delete</button>' : '')
       + '</div>'
       + '</div>'
-      + '<table class="data-table" style="border:none; border-radius:0; box-shadow:none;">'
+      + '<table class="data-table mobile-card-table" style="border:none; border-radius:0; box-shadow:none;">'
       + '<thead><tr><th>Bearing</th><th>H (mm/s)</th><th>V (mm/s)</th><th>A (mm/s)</th></tr></thead>'
       + '<tbody>'+bodyRows+'</tbody></table>'
       + '<div class="spec-cell notes-cell" style="padding:12px 16px;"><div class="spec-label">Remarks</div><div class="spec-value '+(r.remarks?'':'empty')+'" style="font-family:var(--font-body); font-weight:400;">'+(r.remarks?escapeHtml(r.remarks):'No remarks entered')+'</div></div>'
@@ -2670,8 +2712,8 @@ function openVibrationModal(equipmentId, record){
   const modeOptions = VIB_MODES.map(m=>'<option value="'+m+'" '+(record&&record.modeOfOperation===m?'selected':'')+'>'+m+'</option>').join('');
   const bearingRows = VIB_BEARINGS.map(b=>{
     const row = readings[b] || {};
-    const cells = VIB_AXES.map(axis=>'<td><input type="number" step="any" id="rf-'+b+'-'+axis+'" value="'+escapeHtml(row[axis]||'')+'" style="width:100%;"></td>').join('');
-    return '<tr><td class="mono" style="font-weight:600;">'+b+'</td>'+cells+'</tr>';
+    const cells = VIB_AXES.map(axis=>'<td data-mobile-label="'+axis+' (mm/s)"><input type="number" step="any" id="rf-'+b+'-'+axis+'" value="'+escapeHtml(row[axis]||'')+'" style="width:100%;"></td>').join('');
+    return '<tr><td class="mono" style="font-weight:600;" data-mobile-label="Bearing">'+b+'</td>'+cells+'</tr>';
   }).join('');
 
   openModal(
@@ -2680,7 +2722,7 @@ function openVibrationModal(equipmentId, record){
     + '<div class="field-row"><div class="field"><label>Date</label><input type="date" id="rf-date" value="'+(record?record.date:'')+'"></div>'
     + '<div class="field"><label>Mode of Operation</label><select id="rf-mode"><option value="" disabled '+(!record?'selected':'')+'>Select mode&hellip;</option>'+modeOptions+'</select></div></div>'
     + '<div class="field"><label>Shop Reference No. (optional &mdash; helps identify which motor this reading is from, if it has since been replaced)</label><input type="text" id="rf-shopref" value="'+escapeHtml(record?record.shopRefNo||'':'')+'" placeholder="e.g. motor shop ref / serial no."></div>'
-    + '<div class="field"><label>Vibration readings (mm/s)</label><table class="data-table"><thead><tr><th>Bearing</th><th>H (mm/s)</th><th>V (mm/s)</th><th>A (mm/s)</th></tr></thead><tbody>'+bearingRows+'</tbody></table></div>'
+    + '<div class="field"><label>Vibration readings (mm/s)</label><table class="data-table mobile-card-table"><thead><tr><th>Bearing</th><th>H (mm/s)</th><th>V (mm/s)</th><th>A (mm/s)</th></tr></thead><tbody>'+bearingRows+'</tbody></table></div>'
     + '<div class="field"><label>Remarks (optional)</label><textarea id="rf-remarks">'+escapeHtml(record?record.remarks:'')+'</textarea></div>',
     '<button class="btn btn-outline" id="modal-cancel-btn">Cancel</button><button class="btn btn-primary" id="modal-save-btn">Save</button>'
   );
@@ -3194,13 +3236,13 @@ function renderEarthPitRegister(stationId, yearId){
   const statusHeaderCells = EARTHPIT_STATUS_FIELDS.map(f=>'<th>'+f.label+'</th>').join('');
 
   const rows = records.map(r=>{
-    const statusReadCells = EARTHPIT_STATUS_FIELDS.map(f=>'<td>'+escapeHtml(r[f.key]||'OK')+'</td>').join('');
+    const statusReadCells = EARTHPIT_STATUS_FIELDS.map(f=>'<td data-mobile-label="'+f.label+'">'+escapeHtml(r[f.key]||'OK')+'</td>').join('');
     return '<tr>'
-      + '<td class="mono">'+escapeHtml(r.sNo||'\u2014')+'</td>'
-      + '<td>'+escapeHtml(r.pitNo||'\u2014')+'</td>'
-      + '<td class="mono">'+escapeHtml(r.resistanceValue||'\u2014')+'</td>'
-      + '<td class="mono">'+formatDate(r.testingDate)+'</td>'
-      + '<td class="mono">'+formatDate(r.dueDate)+'</td>'
+      + '<td class="mono" data-mobile-label="S. No.">'+escapeHtml(r.sNo||'\u2014')+'</td>'
+      + '<td data-mobile-label="Earth Pit No.">'+escapeHtml(r.pitNo||'\u2014')+'</td>'
+      + '<td class="mono" data-mobile-label="Resistance Value">'+escapeHtml(r.resistanceValue||'\u2014')+'</td>'
+      + '<td class="mono" data-mobile-label="Testing Date">'+formatDate(r.testingDate)+'</td>'
+      + '<td class="mono" data-mobile-label="Due Date">'+formatDate(r.dueDate)+'</td>'
       + statusReadCells
       + (operator ? '<td class="row-actions">'
           + (operator ? '<button class="btn btn-outline btn-sm" data-ep-edit="'+r.id+'">Edit</button>' : '')
@@ -3217,7 +3259,7 @@ function renderEarthPitRegister(stationId, yearId){
     + '</div>'
     + (records.length===0
       ? '<div class="empty-state"><h3>No earth pit records yet</h3><p>'+(operator?'Add the first record above.':'No records have been added for this year yet.')+'</p></div>'
-      : '<div style="overflow-x:auto;"><table class="data-table"><thead><tr>'
+      : '<div style="overflow-x:auto;"><table class="data-table mobile-card-table"><thead><tr>'
         + '<th>S. No.</th><th>Earth Pit No.</th><th>Earth Resistance Value (&Omega;)</th><th>Testing Date</th><th>Due Date</th>'+statusHeaderCells
         + (operator?'<th></th>':'')
         + '</tr></thead><tbody>'+rows+'</tbody></table></div>');
@@ -5079,12 +5121,12 @@ function meggerFormHtml(existing){
   const rows = MEGGER_PAIRS.map(p=>{
     const val = (m[p.key] && m[p.key].value) || '';
     const unit = (m[p.key] && m[p.key].unit) || 'M\u03a9';
-    return '<tr><td class="mono" style="font-weight:600;">'+p.label+'</td>'
-      + '<td><input type="text" class="megger-value-input" data-megger-key="'+p.key+'" value="'+escapeHtml(val)+'" style="width:100%;"></td>'
-      + '<td><select class="megger-unit-input" data-megger-key="'+p.key+'">'+MEGGER_UNITS.map(u=>'<option value="'+u+'" '+(unit===u?'selected':'')+'>'+u+'</option>').join('')+'</select></td></tr>';
+    return '<tr><td class="mono" style="font-weight:600;" data-mobile-label="Pair">'+p.label+'</td>'
+      + '<td data-mobile-label="Value"><input type="text" class="megger-value-input" data-megger-key="'+p.key+'" value="'+escapeHtml(val)+'" style="width:100%;"></td>'
+      + '<td data-mobile-label="Unit"><select class="megger-unit-input" data-megger-key="'+p.key+'">'+MEGGER_UNITS.map(u=>'<option value="'+u+'" '+(unit===u?'selected':'')+'>'+u+'</option>').join('')+'</select></td></tr>';
   }).join('');
   return '<details style="margin-top:4px; margin-bottom:14px;"><summary style="cursor:pointer; padding:8px 0; font-weight:600; font-size:13px;">Enter Megger Reading (optional)</summary>'
-    + '<table class="data-table" style="border:none; box-shadow:none; margin-top:8px;"><thead><tr><th>Pair</th><th>Value</th><th>Unit</th></tr></thead><tbody>'+rows+'</tbody></table>'
+    + '<table class="data-table mobile-card-table" style="border:none; box-shadow:none; margin-top:8px;"><thead><tr><th>Pair</th><th>Value</th><th>Unit</th></tr></thead><tbody>'+rows+'</tbody></table>'
     + '<div class="field" style="margin-top:8px;"><label>Megger Remarks</label><textarea class="megger-remarks-input">'+escapeHtml(m.remarks||'')+'</textarea></div>'
     + '</details>';
 }
@@ -5122,11 +5164,11 @@ function meggerDisplayHtml(megger){
   const rows = MEGGER_PAIRS.map(p=>{
     const entry = megger[p.key];
     if(!entry || !entry.value) return '';
-    return '<tr><td class="mono" style="font-weight:600;">'+p.label+'</td><td class="mono">'+escapeHtml(entry.value)+' '+escapeHtml(entry.unit||'')+'</td></tr>';
+    return '<tr><td class="mono" style="font-weight:600;" data-mobile-label="Pair">'+p.label+'</td><td class="mono" data-mobile-label="Reading">'+escapeHtml(entry.value)+' '+escapeHtml(entry.unit||'')+'</td></tr>';
   }).filter(Boolean).join('');
   if(!rows && !megger.remarks) return '';
   return '<div class="spec-cell notes-cell"><div class="spec-label">Megger Reading</div>'
-    + (rows ? '<table class="data-table" style="border:none; box-shadow:none; max-width:280px;"><tbody>'+rows+'</tbody></table>' : '')
+    + (rows ? '<table class="data-table mobile-card-table" style="border:none; box-shadow:none; max-width:280px;"><tbody>'+rows+'</tbody></table>' : '')
     + (megger.remarks ? '<div class="spec-value" style="font-family:var(--font-body); font-weight:400; margin-top:6px;">'+escapeHtml(megger.remarks)+'</div>' : '')
     + '</div>';
 }
@@ -5475,9 +5517,9 @@ function renderPMTab(equipmentId, highlightRecordId){
     const notOkCount = checklist.filter(c=>c.status==='NOTOK').length;
     const naCount = checklist.filter(c=>c.status==='NA').length;
     const checklistRows = checklist.map((c,i)=>
-      '<tr><td class="mono">'+(i+1)+'</td><td>'+escapeHtml(c.item)+'</td>'
-      + '<td class="mono">'+PM_STATUS_LABELS[c.status||'OK']+'</td>'
-      + '<td>'+(c.remarks?escapeHtml(c.remarks):'<span class="muted">&mdash;</span>')+'</td></tr>'
+      '<tr><td class="mono" data-mobile-label="S.No">'+(i+1)+'</td><td data-mobile-label="Item">'+escapeHtml(c.item)+'</td>'
+      + '<td class="mono" data-mobile-label="Status">'+PM_STATUS_LABELS[c.status||'OK']+'</td>'
+      + '<td data-mobile-label="Remarks">'+(c.remarks?escapeHtml(c.remarks):'<span class="muted">&mdash;</span>')+'</td></tr>'
     ).join('');
     const sparesRows = (r.spares||[]).filter(s=>s.name).map(s=>
       '<tr><td>'+escapeHtml(s.name)+'</td><td class="mono">'+escapeHtml(s.qty||'')+'</td></tr>'
@@ -5485,9 +5527,9 @@ function renderPMTab(equipmentId, highlightRecordId){
     const actions = r.actions || [];
     const actionsDoneCount = actions.filter(a=>a.status==='DONE').length;
     const actionRows = actions.map((a,i)=>
-      '<tr><td class="mono">'+(i+1)+'</td><td>'+escapeHtml(a.item)+'</td>'
-      + '<td class="mono">'+PM_ACTION_STATUS_LABELS[a.status||'NOTDONE']+'</td>'
-      + '<td>'+(a.remarks?escapeHtml(a.remarks):'<span class="muted">&mdash;</span>')+'</td></tr>'
+      '<tr><td class="mono" data-mobile-label="S.No">'+(i+1)+'</td><td data-mobile-label="Task">'+escapeHtml(a.item)+'</td>'
+      + '<td class="mono" data-mobile-label="Status">'+PM_ACTION_STATUS_LABELS[a.status||'NOTDONE']+'</td>'
+      + '<td data-mobile-label="Remarks">'+(a.remarks?escapeHtml(a.remarks):'<span class="muted">&mdash;</span>')+'</td></tr>'
     ).join('');
     const photoThumbs = PM_PHOTO_SLOTS.map(slot=>{
       const p = r.photos && r.photos[slot.key];
@@ -5508,10 +5550,10 @@ function renderPMTab(equipmentId, highlightRecordId){
       + '<div class="spec-cell"><div class="spec-label">Checklist Summary</div><div class="spec-value" style="font-family:var(--font-body); font-weight:400;">'+checklist.length+' items &middot; '+notOkCount+' Not OK &middot; '+naCount+' N/A</div></div>'
       + '</div>'
       + '<details style="padding:0 16px 12px;"><summary style="cursor:pointer; padding:8px 0; font-weight:600; font-size:13px;">View full checklist</summary>'
-      + '<table class="data-table" style="border:none; border-radius:0; box-shadow:none;">'
+      + '<table class="data-table mobile-card-table" style="border:none; border-radius:0; box-shadow:none;">'
       + '<thead><tr><th>S.No</th><th>Inspection Item</th><th>Status</th><th>Remarks</th></tr></thead><tbody>'+checklistRows+'</tbody></table></details>'
       + (actions.length ? '<details style="padding:0 16px 12px;"><summary style="cursor:pointer; padding:8px 0; font-weight:600; font-size:13px;">View actions performed ('+actionsDoneCount+'/'+actions.length+' done)</summary>'
-        + '<table class="data-table" style="border:none; border-radius:0; box-shadow:none;">'
+        + '<table class="data-table mobile-card-table" style="border:none; border-radius:0; box-shadow:none;">'
         + '<thead><tr><th>S.No</th><th>Task</th><th>Status</th><th>Remarks</th></tr></thead><tbody>'+actionRows+'</tbody></table></details>' : '')
       + (r.megger ? '<div style="padding:0 16px 12px;">'+meggerDisplayHtml(r.megger)+'</div>' : '')
       + (sparesRows ? '<div class="spec-cell notes-cell" style="padding:0 16px 12px;"><div class="spec-label">Spares Consumed</div><table class="data-table" style="border:none; border-radius:0; box-shadow:none;"><thead><tr><th>Spare</th><th>Quantity</th></tr></thead><tbody>'+sparesRows+'</tbody></table></div>' : '')
@@ -5573,9 +5615,9 @@ function openPMModal(equipmentId, record){
   const checklistRows = checklist.map((c,i)=>
     '<tr data-pm-check-row="'+i+'">'
     + '<td class="mono">'+(i+1)+'</td>'
-    + '<td style="max-width:260px;">'+escapeHtml(c.item)+'</td>'
-    + PM_STATUS_OPTIONS.map(opt=>'<td style="text-align:center;"><input type="radio" name="pm-status-'+i+'" value="'+opt+'" '+((c.status||'OK')===opt?'checked':'')+'></td>').join('')
-    + '<td><input type="text" data-pm-remarks="'+i+'" value="'+escapeHtml(c.remarks||'')+'" style="width:100%;"></td>'
+    + '<td style="max-width:260px;" data-mobile-label="Item">'+escapeHtml(c.item)+'</td>'
+    + PM_STATUS_OPTIONS.map(opt=>'<td style="text-align:center;" data-mobile-label="'+PM_STATUS_LABELS[opt]+'"><input type="radio" name="pm-status-'+i+'" value="'+opt+'" '+((c.status||'OK')===opt?'checked':'')+'></td>').join('')
+    + '<td data-mobile-label="Remarks"><input type="text" data-pm-remarks="'+i+'" value="'+escapeHtml(c.remarks||'')+'" style="width:100%;"></td>'
     + '</tr>'
   ).join('');
 
@@ -5588,9 +5630,9 @@ function openPMModal(equipmentId, record){
   const actionRows = actions.map((a,i)=>
     '<tr data-pm-action-row="'+i+'">'
     + '<td class="mono">'+(i+1)+'</td>'
-    + '<td style="max-width:260px;">'+escapeHtml(a.item)+'</td>'
-    + PM_ACTION_STATUS_OPTIONS.map(opt=>'<td style="text-align:center;"><input type="radio" name="pm-action-status-'+i+'" value="'+opt+'" '+((a.status||'NOTDONE')===opt?'checked':'')+'></td>').join('')
-    + '<td><input type="text" data-pm-action-remarks="'+i+'" value="'+escapeHtml(a.remarks||'')+'" style="width:100%;"></td>'
+    + '<td style="max-width:260px;" data-mobile-label="Task">'+escapeHtml(a.item)+'</td>'
+    + PM_ACTION_STATUS_OPTIONS.map(opt=>'<td style="text-align:center;" data-mobile-label="'+PM_ACTION_STATUS_LABELS[opt]+'"><input type="radio" name="pm-action-status-'+i+'" value="'+opt+'" '+((a.status||'NOTDONE')===opt?'checked':'')+'></td>').join('')
+    + '<td data-mobile-label="Remarks"><input type="text" data-pm-action-remarks="'+i+'" value="'+escapeHtml(a.remarks||'')+'" style="width:100%;"></td>'
     + '</tr>'
   ).join('');
 
@@ -5607,8 +5649,8 @@ function openPMModal(equipmentId, record){
     + '<div class="field-row"><div class="field"><label>Date</label><input type="date" id="pmf-date" value="'+(record?record.date:'')+'"></div>'
     + '<div class="field"><label>Time</label><input type="time" id="pmf-time" value="'+(record?record.time||'':'')+'"></div></div>'
     + '<div class="field"><label>Team Assigned</label><div style="max-height:140px; overflow-y:auto; border:1px solid var(--color-border); border-radius:6px; padding:8px 12px;">'+teamCheckboxes+'</div></div>'
-    + '<div class="field"><label>Preventive Maintenance Checklist</label><table class="data-table"><thead><tr><th>S.No</th><th>Inspection Item</th><th>OK</th><th>Not OK</th><th>N/A</th><th>Remarks</th></tr></thead><tbody id="pm-checklist-body">'+checklistRows+'</tbody></table></div>'
-    + '<div class="field"><label>Actions Performed</label><table class="data-table"><thead><tr><th>S.No</th><th>Task</th><th>Done</th><th>Not Done</th><th>N/A</th><th>Remarks</th></tr></thead><tbody id="pm-actions-body">'+actionRows+'</tbody></table></div>'
+    + '<div class="field"><label>Preventive Maintenance Checklist</label><table class="data-table mobile-card-table pm-check-table"><thead><tr><th>S.No</th><th>Inspection Item</th><th>OK</th><th>Not OK</th><th>N/A</th><th>Remarks</th></tr></thead><tbody id="pm-checklist-body">'+checklistRows+'</tbody></table></div>'
+    + '<div class="field"><label>Actions Performed</label><table class="data-table mobile-card-table pm-check-table"><thead><tr><th>S.No</th><th>Task</th><th>Done</th><th>Not Done</th><th>N/A</th><th>Remarks</th></tr></thead><tbody id="pm-actions-body">'+actionRows+'</tbody></table></div>'
     + meggerFormHtml(record?record.megger:null)
     + '<div class="field"><label>Spares Consumed (optional)</label><table class="data-table"><thead><tr><th>Spare Name</th><th>Quantity</th><th></th></tr></thead><tbody id="pm-spares-body">'+sparesRowsHtml+'</tbody></table>'
     + '<button type="button" class="btn btn-outline btn-sm" id="pm-add-spare-btn" style="margin-top:8px;">+ Add spare</button></div>'
